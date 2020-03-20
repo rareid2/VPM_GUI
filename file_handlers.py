@@ -1,4 +1,4 @@
-import netCDF4
+# import netCDF4
 import xml.etree.ElementTree as ET
 import xml.dom.minidom as MD
 import numpy as np
@@ -6,208 +6,6 @@ import datetime
 import os
 import logging
 
-def write_survey_netCDF(data, filename='survey_data.nc'):
-    '''
-    Author:     Austin Sousa
-                austin.sousa@colorado.edu
-    Version:    1.0
-        Date:   10.19.2019
-    Description:
-        Writes decoded survey data to a netCDF file
-
-    inputs: 
-        data: A list of dictionaries, as generated from decode_survey_data.py
-        filename: The output file; please use a ".nc" suffix
-    outputs:
-        A saved file at <filename>
-    '''
-
-
-    f = netCDF4.Dataset(filename,"w")
-    time = f.createDimension("time",None)
-    freq = f.createDimension("frequency",512)
-
-    E = f.createVariable('data/E','uint8',('time','frequency'))
-    E.description = "Electric field survey data"
-
-    B = f.createVariable('data/B','uint8',('time','frequency'))
-    B.description = "Magnetic field survey data"
-
-    T = f.createVariable('data/T','i4',('time'))
-    T.description = "time (UNIX timestamp, UTC)"
-
-    lat = f.createVariable('GPS/lat','d',('time'))
-    lat.description = "geo latitude"
-    lat.units = 'deg'
-    lon = f.createVariable('GPS/lon','d',('time'))
-    lon.description = "geo longitude"
-    lon.units = 'deg'
-    alt = f.createVariable('GPS/alt','d',('time'))
-    alt.description = 'height above sea level'
-    alt.units = 'm'
-    v_horiz = f.createVariable('GPS/vel_horiz','d',('time'))
-    v_horiz.description="Horizontal velocity"
-    v_horiz.units="m/s"
-    v_vert = f.createVariable('GPS/vel_vert','d',('time'))
-    v_vert.description="Vertical velocity"
-    v_vert.units='m/s'
-    v_gt = f.createVariable('GPS/ground_track','d',('time'))
-    v_gt.description="Ground track direction"
-    v_gt.units='deg'
-
-    # GPS metadata:
-    tracked_sats = f.createVariable('GPS/metadata/tracked_sats','I',('time'))
-    used_sats    = f.createVariable('GPS/metadata/used_sats','I',('time'))
-    soln_status  = f.createVariable('GPS/metadata/solution_status','I',('time'))
-    soln_type    = f.createVariable('GPS/metadata/solution_type','I',('time'))
-    latency      = f.createVariable('GPS/metadata/latency','f4',('time'))
-
-    # Flip through the list, sorted by timestamp
-    for i, d in enumerate(sorted(data, key = lambda i: i['GPS'][0]['timestamp'])):
-        E[i,:] = d['E_data']
-        B[i,:] = d['B_data']
-
-        T[i] = d['GPS'][0]['timestamp']
-
-        lat[i] = d['GPS'][0]['lat']
-        lon[i] = d['GPS'][0]['lon']
-        alt[i] = d['GPS'][0]['alt']
-        
-        v_horiz[i] = d['GPS'][0]['horiz_speed']
-        v_vert[i]  = d['GPS'][0]['vert_speed']
-        v_gt[i]    = d['GPS'][0]['ground_track']
-
-        # GPS metadata
-        tracked_sats[i] = d['GPS'][0]['tracked_sats']
-        used_sats[i]    = d['GPS'][0]['used_sats']
-        soln_status[i]  = d['GPS'][0]['solution_status']
-        soln_type[i]    = d['GPS'][0]['solution_type']
-        latency[i]      = d['GPS'][0]['latency']
-
-    f.close()
-
-
-def write_burst_netCDF(data_in, filename='burst_data.nc'):
-
-
-    datatype = 'int16' # single, double? int? The original data is 16 bit
-
-    for ind, data in enumerate(data_in): 
-    # Write a separate file for each burst
-
-        # Filename
-        if ind == 0:
-            fname = filename
-        else:
-            components = os.path.splitext(filename)
-            fname = components[0] + f"_{ind}" + components[1]
-
-        f = netCDF4.Dataset(fname,"w")
-        # Burst configuration parameters:
-        cfg = f.createGroup('config')
-        for k,v in data['config'].items():
-            setattr(cfg, k, v)
-
-        time = f.createDimension("time",None)
-
-        # There's a timestamp corresponding to each nPulses; each timestamp object is a position and velocity message.
-        # TODO: have decode_GPS return a list of timestamps
-        ts = f.createDimension("timestamps",None) 
-        f_gps = f.createGroup('GPS')
-
-        if data['config']['TD_FD_SELECT'] ==1:
-            # Time-domain mode:
-
-
-            E = f.createVariable('data/E','i2',('time'))
-            E.description = "Electric field burst data"
-            E.units = "eng. units"
-            E[:] = data['E']
-
-            B = f.createVariable('data/B','i2',('time'))
-            B.description = "Magnetic field burst data"
-            B.units = "eng. units"
-            B[:] = data['B']
-            
-            # T = f.createVariable('data/t_axis','f4',('time'))
-            # T.description = "time axis (seconds elapsed from beginning of burst)"
-            # T[:] = data['t_axis']
-
-        else:
-            # Frequency-domain mode:
-
-            # Get frequency axis size:
-            f_length = int(data['config']['BINS'].count('1')*(1024/2/16))
-        
-            freq = f.createDimension("frequency",f_length)
-            
-            max_E = len(data['E']) - np.mod(len(data['E']), f_length)
-            E_2D = data['E'][0:max_E].reshape(int(max_E/f_length), f_length)
-            max_B = len(data['B']) - np.mod(len(data['B']), f_length)
-            B_2D = data['B'][0:max_B].reshape(int(max_B/f_length), f_length)
-
-            E_real = f.createVariable('data/E/real','i2',('time','frequency'))
-            E_real.description = "Electric field burst data -- real component"
-            E_imag = f.createVariable('data/E/imag','i2',('time','frequency'))
-            E_imag.description = "Electric field burst data -- imaginary component"
-            
-            E_real[:,:] = np.real(E_2D).astype('int16')
-            E_imag[:,:] = np.imag(E_2D).astype('int16')
-            
-            B_real = f.createVariable('data/B/real','i2',('time','frequency'))
-            B_real.description = "Magnetic field burst data -- real component"
-            B_imag = f.createVariable('data/B/imag','i2',('time','frequency'))
-            B_imag.description = "Magnetic field burst data -- imaginary component"
-
-            B_real[:,:] = np.real(B_2D).astype('int16')
-            B_imag[:,:] = np.imag(B_2D).astype('int16')
-
-        # GPS data:
-        lat = f.createVariable('GPS/lat','d',('timestamps'))
-        lat.description = "geo latitude"
-        lat.units = 'deg'
-        lon = f.createVariable('GPS/lon','d',('timestamps'))
-        lon.description = "geo longitude"
-        lon.units = 'deg'
-        alt = f.createVariable('GPS/alt','d',('timestamps'))
-        alt.description = 'height above sea level'
-        alt.units = 'm'
-        v_horiz = f.createVariable('GPS/vel_horiz','d',('timestamps'))
-        v_horiz.description="Horizontal velocity"
-        v_horiz.units="m/s"
-        v_vert = f.createVariable('GPS/vel_vert','d',('timestamps'))
-        v_vert.description="Vertical velocity"
-        v_vert.units='m/s'
-        v_gt = f.createVariable('GPS/ground_track','d',('timestamps'))
-        v_gt.description="Ground track direction"
-        v_gt.units='deg'
-
-        # GPS metadata:
-        tracked_sats = f.createVariable('GPS/metadata/tracked_sats','I',('timestamps'))
-        used_sats    = f.createVariable('GPS/metadata/used_sats','I',('timestamps'))
-        soln_status  = f.createVariable('GPS/metadata/solution_status','I',('timestamps'))
-        soln_type    = f.createVariable('GPS/metadata/solution_type','I',('timestamps'))
-        latency      = f.createVariable('GPS/metadata/latency','f4',('timestamps'))
-
-
-        # here's where you should loop over multiple GPS timestamp messages:
-        for i, G in enumerate(data['G']):
-        
-            lat[i] = G['lat']
-            lon[i] = G['lon']
-            alt[i] = G['alt']
-
-            v_horiz[i] = G['horiz_speed']
-            v_vert[i] = G['vert_speed']
-            v_gt[i] = G['ground_track']
-
-            # GPS metadata
-            tracked_sats[i] = G['tracked_sats']
-            used_sats[i] = G['used_sats']
-            soln_status[i] = G['solution_status']
-            soln_type[i] = G['solution_type']
-            latency[i] = G['latency']
-        f.close()
 
 def write_status_XML(in_data, filename="status_messages.xml"):
     '''write status messages to an xml file'''
@@ -259,11 +57,11 @@ def write_survey_XML(in_data, filename='survey_data.xml'):
         E_elem.text = np.array2string(entry_data['E_data'], max_line_width=1000000000000, separator=',')[1:-2]
         B_elem.text = np.array2string(entry_data['B_data'], max_line_width=1000000000000, separator=',')[1:-2]
 
+        if 'GPS' in entry_data:
+            for k, v in entry_data['GPS'][0].items():
 
-        for k, v in entry_data['GPS'][0].items():
-
-            cur_item = ET.SubElement(GPS_elem,k)
-            cur_item.text = str(v)
+                cur_item = ET.SubElement(GPS_elem,k)
+                cur_item.text = str(v)
         # header_entry = ET.SubElement(GPS_elem,'header_timestamp')
         # header_entry.text = '{0:f}'.format(entry_data['header_timestamp'])
 
@@ -296,6 +94,14 @@ def read_survey_XML(filename):
             except:
                 d['GPS'][0][el.tag] = float(el.text)
         outs.append(d)
+
+        header_timestamp_isoformat = S.attrib['header_timestamp']
+        d['header_timestamp'] = datetime.datetime.fromisoformat(header_timestamp_isoformat).replace(tzinfo=datetime.timezone.utc).timestamp()
+
+    # if d:
+    #     logging.info(f'survey keys: {d.keys()}')
+    # else:
+    #     logging.info(f'No survey entries found')
 
     # Return a list of dicts
     return outs

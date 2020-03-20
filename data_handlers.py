@@ -195,10 +195,11 @@ def print_status(data_list):
         f"\nGPS errors:\t\t{d['GPS_errors']}\n" +\
         f"GPS restart:\t\t{d['gps_resets']}\n"
 
-        print(nice_str)
-        print('\n')
+        return nice_str
+        # print(nice_str)
+        # print('\n')
 
-        decode_uBBR_command(d['prev_bbr_command'])
+        # decode_uBBR_command(d['prev_bbr_command'])
 
 def decode_burst_command(cmd):
     '''
@@ -229,6 +230,7 @@ def decode_burst_command(cmd):
                       A '1' enables data collection for this bin.
     '''
     logger = logging.getLogger(__name__)
+
 
     logger.debug(f'decoding command: {cmd}')
     cmd_str = ''.join("{0:8b}".format(x) for x in cmd).replace(' ','0')
@@ -493,15 +495,29 @@ def decode_packets_CSV(data_root, filename):
     '''
     logger = logging.getLogger(__name__)
     fpath = os.path.join(data_root, filename)
+    header_string = 'TARGET,PACKET,UTC_TIME,DYNAMIC_DATA,'  # In case the format changes...
+
+    # Find the header row
     with open(fpath) as csvfile:
+            # Check if we have the header in the first row:
+            cur = csvfile.read().split('\n')
+            header_index = cur.index(header_string)
+
+    with open(fpath) as csvfile:
+        # Skip up to the header row:
+        for i in range(header_index):
+            csvfile.readline()
+
         reader = csv.DictReader(csvfile, delimiter=',')
         timestamps = []
         raw_data = []
         for row in reader:
-            if row['TARGET'] == 'VPM_STORED' and row['PACKET'] == 'PAYLOAD_INTERFACE_RECEIVE_RAW_PAYLOAD_DATA':
-                timestamps.append(row['UTC_TIME'])
-                raw_data.append(bytes.fromhex(row['DYNAMIC_DATA']))
-
+            try:
+                if row['TARGET'] == 'VPM_STORED' and row['PACKET'] == 'PAYLOAD_INTERFACE_RECEIVE_RAW_PAYLOAD_DATA':
+                    timestamps.append(row['UTC_TIME'])
+                    raw_data.append(bytes.fromhex(row['DYNAMIC_DATA']))
+            except:
+                logger.info(f'skipped CSV line: {row}')
     
     # Packet indices and lengths (set in payload firmware)
     PACKET_SIZE = 512
@@ -579,7 +595,7 @@ def decode_packets_CSV(data_root, filename):
     if checksum_failure_counter > 0:
         logger.warning(f'--------------- {checksum_failure_counter} failed checksums ---------------')
 
-    return packet
+    return packets
 
 def remove_trailing_nans(arr1d):
     ''' Trims off the trailing NaNs of a vector.'''
@@ -1169,35 +1185,40 @@ def decode_survey_data(packets):
 
         # Iterate over sub-lists of packets, as divided by splits:
         for s1,s2 in zip(splits[0:-1],splits[1:]):
-            # Start with all nans
-            cur_data = np.zeros(survey_packet_length)*np.nan
-            # Insert each packets' payload
-            for p in cur_packets[s1:s2]:
-                cur_data[p['start_ind']:(p['start_ind'] + p['bytecount'])] = p['data']
-            # Did we get a full packet? 
-            if np.sum(np.isnan(cur_data)) == 0:
-                # Complete packet!
-                
-                E_data = cur_data[bbr_index_noLCS]
-                B_data = cur_data[bbr_index_noLCS + 4]
-                G_data = cur_data[gps_index].astype('uint8')
+            try:
+                # Start with all nans
+                cur_data = np.zeros(survey_packet_length)*np.nan
+                # Insert each packets' payload
+                for p in cur_packets[s1:s2]:
+                    cur_data[p['start_ind']:(p['start_ind'] + p['bytecount'])] = p['data']
+                # Did we get a full packet? 
+                if np.sum(np.isnan(cur_data)) == 0:
+                    # Complete packet!
+                    
+                    E_data = cur_data[bbr_index_noLCS]
+                    B_data = cur_data[bbr_index_noLCS + 4]
+                    G_data = cur_data[gps_index].astype('uint8')
 
-                G = decode_GPS_data(G_data)
+                    d = dict()
+                    try:
+                        G = decode_GPS_data(G_data)
+                        d['GPS'] = G
+                    except:
+                        logger.warning('Failed to decode survey GPS data')
 
-                d = dict()
-                d['GPS'] = G
-                d['E_data'] = E_data.astype('uint8')
-                d['B_data'] = B_data.astype('uint8')
-                # d['header_epoch_sec'] = cur_packets[s1]['header_epoch_sec']
-                d['header_timestamp'] = cur_packets[s1]['header_timestamp']
-                d['exp_num'] = e_num
-                S_data.append(d)
+                    d['E_data'] = E_data.astype('uint8')
+                    d['B_data'] = B_data.astype('uint8')
+                    # d['header_epoch_sec'] = cur_packets[s1]['header_epoch_sec']
+                    d['header_timestamp'] = cur_packets[s1]['header_timestamp']
+                    d['exp_num'] = e_num
+                    S_data.append(d)
 
-            else:
-                # If not, put the unused packets aside, so we can possibly
-                # combine with packets from other files
-                unused.extend(cur_packets[s1:s2])
-
+                else:
+                    # If not, put the unused packets aside, so we can possibly
+                    # combine with packets from other files
+                    unused.extend(cur_packets[s1:s2])
+            except:
+                logging.warning(f'bad survey packet between {s1} and {s2}')
     # Send it
     logger.info(f'Recovered {len(S_data)} survey products, leaving {len(unused)} unused packets')
     return S_data, unused

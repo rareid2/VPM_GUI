@@ -18,7 +18,19 @@ import matplotlib.dates as mdates
 import scipy.signal
 import os
 import math
-from mpl_toolkits.basemap import Basemap
+
+try:
+    from mpl_toolkits.basemap import Basemap
+except:
+    import os
+    import conda
+
+    conda_file_dir = conda.__file__
+    conda_dir = conda_file_dir.split('lib')[0]
+    proj_lib = os.path.join(os.path.join(conda_dir, 'share'), 'proj')
+    os.environ["PROJ_LIB"] = proj_lib
+    from mpl_toolkits.basemap import Basemap
+# from mpl_toolkits.basemap import Basemap
 from scipy.interpolate import interp1d, interp2d
 
 
@@ -111,7 +123,7 @@ def packet_inspector(parent, packets):
 
     return True
 
-def plot_survey_data(parent, S_data):
+def plot_survey_data(parent, S_data, cal_file=None, E_gain=False, B_gain=False, bus_timestamps=False):
     '''
     Author:     Austin Sousa
                 austin.sousa@colorado.edu
@@ -141,9 +153,10 @@ def plot_survey_data(parent, S_data):
     # colormap -- parula is Matlab; also try plt.cm.jet or plt.cm.viridis
     cm = parula();
 
-
+    logger.info(f'Cal file: {cal_file}, E_gain {E_gain}, B_gain {B_gain}')
     # Abandon if we don't have any data to plot
     if S_data is None:
+        logger.info('No survey data present!')
         return
     
     # Assemble into grids:
@@ -184,34 +197,71 @@ def plot_survey_data(parent, S_data):
     e_cbax = fig.add_subplot(gs[0,1])
     b_cbax = fig.add_subplot(gs[1,1])
 
+    e_clims = [50, 255]
+    b_clims = [150, 255]
 
-    # # Map the log-scaled survey outputs to physical units
-    # # This block accounts for the log-scaling and averaging modules,
-    # # and delivers dB-full-scale values at each frequency bin.
-    # # survey_fullscale = 20*np.log10(pow(2,32))   # 32 bits representing 0 - 1.
-    # SF = 256./32. # Equation 5.5 in Austin's thesis. 2^(bits out)/(bits in)
+    if cal_file:
+        try:
+            with open(cal_file,'rb') as file:
+                logger.debug(f'loading calibration file {cal_file}')
+                cal_data = pickle.load(file)
+        except:
+            logger.warning(f'Failed to load calibration file {cal_file}')
+            cal_file = None
+    
+    if cal_file:
 
-    # # # (This is also where we might bring in a real-world calibration factor)
-    # # # E = 20*np.log10(pow(2,E/SF)) - survey_fullscale
-    # # # B = 20*np.log10(pow(2,B/SF)) - survey_fullscale
+        # Map the log-scaled survey outputs to physical units
+        # This block accounts for the log-scaling and averaging modules,
+        # and delivers dB-full-scale values at each frequency bin.
+        # survey_fullscale = 20*np.log10(pow(2,32))   # 32 bits representing 0 - 1.
+        SF = 256./32. # Equation 5.5 in Austin's thesis. 2^(bits out)/(bits in)
 
-    # # Normalize to full scale at output of averager; take the square root (e.g., divide by 2)
-    # # This should range from 0 to 16, with 16 representing a full-scale value - 65535.
-    # E = E/SF/2
-    # B = B/SF/2
+        # # (This is also where we might bring in a real-world calibration factor)
+        # # E = 20*np.log10(pow(2,E/SF)) - survey_fullscale
+        # # B = 20*np.log10(pow(2,B/SF)) - survey_fullscale
+
+        # Normalize to full scale at output of averager; take the square root (e.g., divide by 2)
+        # This should range from 0 to 16, with 16 representing a full-scale value - 65535.
+        E = E/SF/2
+        B = B/SF/2
 
 
-    # # # Linear scale -- square root of the (squared) average value
-    # E = pow(2,E)
-    # B = pow(2,B)
-    # # convert to base 10 dB:
-    # E = E/math.log(10,2)
-    # B = B/math.log(10,2)
-    # # Realistically, we're not going to have any zeroes in the survey data,
-    # # due to the noise floor of the uBBR. But let's mask off any infs anyway.
-    # E[np.isinf(E)] = -100
-    # B[np.isinf(B)] = -100
+        # # Linear scale -- square root of the (squared) average value
+        E = pow(2,E)
+        B = pow(2,B)
+        # convert to base 10 dB:
+        E = E/math.log(10,2)
+        B = B/math.log(10,2)
+        # Realistically, we're not going to have any zeroes in the survey data,
+        # due to the noise floor of the uBBR. But let's mask off any infs anyway.
+        E[np.isinf(E)] = -100
+        B[np.isinf(B)] = -100
 
+    # ---------- Calibration coefficients ------
+        ADC_max_value = 32768. # 16 bits, twos comp
+        ADC_max_volts = 1.0    # ADC saturates at +- 1 volt
+
+        E_coef = ADC_max_volts/ADC_max_value  # [Volts at ADC / ADC bin]
+        B_coef = ADC_max_volts/ADC_max_value
+
+        
+        td_lims = [-1, 1]
+        E_cal_curve = cal_data[('E',False, E_gain)] # Hey! The filter changes the gain too, add that as an input
+        B_cal_curve = cal_data[('B',False, B_gain)]
+        E_coef *= 1000.0/max(E_cal_curve) # [(mV/m) / Vadc]
+        B_coef *= 1.0/max(B_cal_curve) # [(nT) / Vadc]
+        E_unit_string = 'mV/m @ Antenna'
+        B_unit_string = 'nT'
+
+        logger.debug(f'E calibration coefficient is {E_coef} mV/m per bit')
+        logger.debug(f'B calibration coefficient is {B_coef} nT per bit')
+    else:
+        E_unit_string = 'V @ ADC'
+        B_unit_string = 'V @ ADC'
+
+        E_coef = 1
+        B_coef = 1
     logger.info(f'emin: {np.min(E)}, emax: {np.max(E)}')
     logger.info(f'bmin: {np.min(B)}, bmax: {np.max(B)}')
 
@@ -228,6 +278,8 @@ def plot_survey_data(parent, S_data):
     E_gapped = np.insert(E.astype('float'), gaps + 1, np.nan*np.ones([1,512]), axis=0)
     B_gapped = np.insert(B.astype('float'), gaps + 1, np.nan*np.ones([1,512]), axis=0)
 
+    E_gapped*=E_coef
+    B_gapped*=B_coef
 
     # Plot E data
     # p1 = ax1.pcolorfast(E.T, vmin=clims[0], vmax=clims[1])
@@ -265,7 +317,9 @@ def plot_survey_data(parent, S_data):
     toolbar.update()
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
 
-def plot_survey_data_and_metadata(parent, S_data,line_plots = ['Lshell','altitude','velocity','lat','lon','used_sats','solution_status','solution_type']):
+def plot_survey_data_and_metadata(parent, S_data, 
+    line_plots = ['Lshell','altitude','velocity','lat','lon','used_sats','solution_status','solution_type'],
+    cal_file=None, E_gain=False, B_gain=False, bus_timestamps=False, plot_map = True):
     # Only import Basemap for this function -- not sure if AFRL can install it yet
 
 
@@ -283,47 +337,70 @@ def plot_survey_data_and_metadata(parent, S_data,line_plots = ['Lshell','altitud
     toolbar.update()
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
 
+    if plot_map or (len(line_plots) > 0):
+        # The full plot: 
+        gs_root = GS.GridSpec(2, 2, height_ratios=[1,2.5], width_ratios=[1,1.5],  wspace = 0.2, hspace = 0.1, figure=fig)
+        gs_data = GS.GridSpecFromSubplotSpec(2, 2, width_ratios=[20, 1], wspace = 0.05, hspace = 0.05, subplot_spec=gs_root[:,1])
+        m_ax = fig.add_subplot(gs_root[0,0])
+    else:
+        gs_data = GS.GridSpec(2, 2, width_ratios=[20, 1], wspace = 0.05, hspace = 0.05, figure = fig)
 
-    gs_root = GS.GridSpec(2, 2, height_ratios=[1,2.5], width_ratios=[1,1.5],  wspace = 0.2, hspace = 0.1, figure=fig)
-    gs_data = GS.GridSpecFromSubplotSpec(2, 2, width_ratios=[20, 1], wspace = 0.05, hspace = 0.05, subplot_spec=gs_root[:,1])
 
-    m_ax = fig.add_subplot(gs_root[0,0])
 
     # colormap -- parula is a clone of the Matlab colormap; also try plt.cm.jet or plt.cm.viridis
     cm = parula(); #plt.cm.viridis;
+
+
+    # Subset of data with GPS stamps included.
+    # We need these for the line plots, regardless if we're using payload or bus timestamps.
+    S_with_GPS = list(filter(lambda x: 'timestamp' in x['GPS'][0], S_data))
+    T_gps = np.array([x['GPS'][0]['timestamp'] for x in S_with_GPS])
+    dts_gps = np.array([datetime.datetime.fromtimestamp(x, tz=datetime.timezone.utc) for x in T_gps])
 
 
     # Build arrays
     E = []
     B = []
     F = np.arange(512)*40/512;
-    for S in sorted(S_data, key = lambda f: f['GPS'][0]['timestamp']):
-        E.append(S['E_data'])
-        B.append(S['B_data'])
+    
+    # # Only plot survey data if we have GPS data to match
+    # S_filt = list(filter(lambda x: 'timestamp' in x['GPS'][0], S_data))
+    if bus_timestamps:
+        logger.info('Using bus timestamps')
+        # Sort using bus timestamp (finer resolution, but includes transmission error
+        # from payload to bus)
+        T = np.array([x['header_timestamp'] for x in S_data])
+        dts = np.array([datetime.datetime.fromtimestamp(x, tz=datetime.timezone.utc) for x in T])
+        for S in sorted(S_data, key = lambda f: f['header_timestamp']):
+            E.append(S['E_data'])
+            B.append(S['B_data'])
+    else:
+        logger.info('using payload timestamps')
+        # Sort using payload GPS timestamp (rounded to nearest second)
+        T = T_gps
+        dts = dts_gps
+        for S in sorted(S_with_GPS, key = lambda f: f['GPS'][0]['timestamp']):
+            E.append(S['E_data'])
+            B.append(S['B_data'])
 
-
-    T = np.array([x['header_timestamp'] for x in S_data])
-    dts = np.array([datetime.datetime.fromtimestamp(x, tz=datetime.timezone.utc) for x in T])
-
-    T_gps = np.array([x['GPS'][0]['timestamp'] for x in S_data])
-    dts_gps = np.array([datetime.datetime.fromtimestamp(x, tz=datetime.timezone.utc) for x in T_gps])
 
 
     # -----------------------------------
     # Spectrograms
     # -----------------------------------
     E = np.array(E); B = np.array(B); T = np.array(T);
+    logger.debug(f'E has shape {np.shape(E)}, B has shape {np.shape(B)}')
 
-    # Sort by time vector:
-    # (This may cause issues if the GPS card is off, since everything restarts at 1/6/1980 without a lock.
-    # The spacecraft timestamp will be accurate enough when bursts are NOT being taken, but things will get
-    # weird during a burst, since the data will have sat in the payload SRAM for a bit before receipt.)
-    sort_inds = np.argsort(T)
-    E = E[sort_inds, :]; B = B[sort_inds, :]; T = T[sort_inds];
+    # # Sort by time vector:
+    # # (This may cause issues if the GPS card is off, since everything restarts at 1/6/1980 without a lock.
+    # # The spacecraft timestamp will be accurate enough when bursts are NOT being taken, but things will get
+    # # weird during a burst, since the data will have sat in the payload SRAM for a bit before receipt.)
+    # sort_inds = np.argsort(T)
+    # E = E[sort_inds, :]; B = B[sort_inds, :]; T = T[sort_inds];
 
     # gs_data = GS.GridSpec(2, 2, width_ratios=[20, 1], wspace = 0.05, hspace = 0.05, subplot_spec=gs_root[1])
     ax1 = fig.add_subplot(gs_data[0,0])
-    ax2 = fig.add_subplot(gs_data[1,0])
+    ax2 = fig.add_subplot(gs_data[1,0], sharex=ax1, sharey=ax1)
     e_cbax = fig.add_subplot(gs_data[0,1])
     b_cbax = fig.add_subplot(gs_data[1,1])
 
@@ -365,120 +442,122 @@ def plot_survey_data_and_metadata(parent, S_data,line_plots = ['Lshell','altitud
     ax1.set_ylabel('E channel\nFrequency [kHz]')
     ax2.set_ylabel('B channel\nFrequency [kHz]')
 
-    lats = [x['GPS'][0]['lat'] for x in S_data]
-    lons = [x['GPS'][0]['lon'] for x in S_data]
-    alts = np.array([x['GPS'][0]['alt'] for x in S_data])/1000.
-    v_horiz = np.array([x['GPS'][0]['horiz_speed'] for x in S_data])
-    v_vert = np.array([x['GPS'][0]['vert_speed'] for x in S_data])
-    vel = np.sqrt(v_horiz*v_horiz + v_vert*v_vert)/1000.
-
     # -----------------------------------
     # Ground track Map
     # -----------------------------------
 
-    m = Basemap(projection='mill',lon_0=0,ax=m_ax, llcrnrlon=-180,llcrnrlat=-70,urcrnrlon=180,urcrnrlat=70)
+    lats = [x['GPS'][0]['lat'] for x in S_with_GPS]
+    lons = [x['GPS'][0]['lon'] for x in S_with_GPS]
+    alts = np.array([x['GPS'][0]['alt'] for x in S_with_GPS])/1000.
+    v_horiz = np.array([x['GPS'][0]['horiz_speed'] for x in S_with_GPS])
+    v_vert = np.array([x['GPS'][0]['vert_speed'] for x in S_with_GPS])
+    vel = np.sqrt(v_horiz*v_horiz + v_vert*v_vert)/1000.
 
-    sx,sy = m(lons, lats)
+    if plot_map:
+        m = Basemap(projection='mill',lon_0=0,ax=m_ax, llcrnrlon=-180,llcrnrlat=-70,urcrnrlon=180,urcrnrlat=70)
+
+        sx,sy = m(lons, lats)
 
 
-    m.drawcoastlines(color='k',linewidth=1,ax=m_ax);
-    m.drawparallels(np.arange(-90,90,30),labels=[1,0,0,0]);
-    m.drawmeridians(np.arange(m.lonmin,m.lonmax+30,60),labels=[0,0,1,0]);
-    m.drawmapboundary(fill_color='cyan');
-    m.fillcontinents(color='white',lake_color='cyan');
-    s = m.scatter(sx,sy,c=T_gps, marker='.', s=10, cmap = get_cmap('plasma'), zorder=100, picker=5)
+        m.drawcoastlines(color='k',linewidth=1,ax=m_ax);
+        m.drawparallels(np.arange(-90,90,30),labels=[1,0,0,0]);
+        m.drawmeridians(np.arange(m.lonmin,m.lonmax+30,60),labels=[0,0,1,0]);
+        m.drawmapboundary(fill_color='cyan');
+        m.fillcontinents(color='white',lake_color='cyan');
+        s = m.scatter(sx,sy,c=T_gps, marker='.', s=10, cmap = get_cmap('plasma'), zorder=100, picker=5)
 
-    # cb = m.colorbar(s, location='bottom', label='Time')
+        # cb = m.colorbar(s, location='bottom', label='Time')
 
-    ticks = [T[0], T[-1]]
-    # cb.set_ticks(ticks)
-    # tl = [datetime.datetime.fromtimestamp(x, tz=datetime.timezone.utc).strftime('%D\n%H:%m:%S') for x in cb.get_ticks()]
-    # cb.set_ticklabels(tl)
+        # ticks = [T[0], T[-1]]
+        # cb.set_ticks(ticks)
+        # tl = [datetime.datetime.fromtimestamp(x, tz=datetime.timezone.utc).strftime('%D\n%H:%m:%S') for x in cb.get_ticks()]
+        # cb.set_ticklabels(tl)
 
+        # Enable click events on the map:
+        def onpick(event):
+            ''' Event handler for a point click '''
+            ind = event.ind
+            t_center = dts[ind[0]]
+            logger.info(f't = {t_center}')
+            ax_lines[-1].set_xlim(t_center - datetime.timedelta(minutes=15), t_center + datetime.timedelta(minutes=15))
+            fig.canvas.draw()
+
+        # tx, ty = m(-175,-60)
+        # m_ax.text(tx, ty, 'Click to zoom')
+
+        cid= fig.canvas.mpl_connect('pick_event', lambda event: onpick(event))
     # -----------------------------------
     # Line plots
     # -----------------------------------
+    if len(line_plots) > 0:
+        gs_lineplots = GS.GridSpecFromSubplotSpec(len(line_plots), 1, hspace=0.5, subplot_spec=gs_root[1,0])
 
-    gs_lineplots = GS.GridSpecFromSubplotSpec(len(line_plots), 1, hspace=0.5, subplot_spec=gs_root[1,0])
+        ax_lines = []
 
-    ax_lines = []
+        # print(S_data[0]['GPS'][0].keys())
+        for ind, a in enumerate(line_plots):
+            ax_lines.append(fig.add_subplot(gs_lineplots[ind]))
 
-    print(S_data[0]['GPS'][0].keys())
-    for ind, a in enumerate(line_plots):
-        ax_lines.append(fig.add_subplot(gs_lineplots[ind]))
-
-    markersize = 4
-    markerface = '.'
-    markeralpha= 0.6
-    for ind, a in enumerate(line_plots):
-        
-        if a in S_data[0]['GPS'][0]:
-            yvals = np.array([x['GPS'][0][a] for x in S_data])
-            ax_lines[ind].plot(dts, yvals,markerface, markersize=markersize, label=a, alpha=markeralpha)
-            ax_lines[ind].set_ylabel(a, rotation=0, labelpad=30)
-        elif a in 'altitude':
-            yvals = np.array([x['GPS'][0]['alt'] for x in S_data])/1000.
-            ax_lines[ind].plot(dts, yvals,markerface, markersize=markersize, label=a, alpha=markeralpha)
-            ax_lines[ind].set_ylabel('Altitude\n[km]', rotation=0, labelpad=30)
-            ax_lines[ind].set_ylim([450,500])
-        elif a in 'dt':
-            ax_lines[ind].plot(dts, T - T_gps,markerface, markersize=markersize, label=a, alpha=markeralpha)
-            ax_lines[ind].set_ylabel(r't$_{header}$ - t$_{GPS}$',  rotation=0, labelpad=30)
-        elif a in 'velocity':
-            ax_lines[ind].plot(dts, vel,markerface, markersize=markersize, alpha=markeralpha, label='Velocity')
-            ax_lines[ind].set_ylabel('Velocity\n[km/sec]', rotation=0, labelpad=30)
-            ax_lines[ind].set_ylim([5,10])
-        elif a in 'Lshell':
-            # This way using a precomputed lookup table:
-            with open('Lshell_dict.pkl','rb') as file:
-                Ldict = pickle.load(file)
-            L_interp = interp2d(Ldict['glon'], Ldict['glat'], Ldict['L'], kind='cubic')
-            Lshell = np.array([L_interp(x,y) for x,y in zip(lons, lats)])
+        markersize = 4
+        markerface = '.'
+        markeralpha= 0.6
+        for ind, a in enumerate(line_plots):
             
-            ax_lines[ind].plot(dts, Lshell,markerface, markersize=markersize,  alpha=markeralpha, label='L shell')
-            ax_lines[ind].set_ylabel('L shell', rotation=0, labelpad=30)
-            ax_lines[ind].set_ylim([1,8])
+            if a in S_with_GPS[0]['GPS'][0]:
+                yvals = np.array([x['GPS'][0][a] for x in S_with_GPS])
+                ax_lines[ind].plot(dts_gps, yvals,markerface, markersize=markersize, label=a, alpha=markeralpha)
+                ax_lines[ind].set_ylabel(a, rotation=0, labelpad=30)
+            elif a in 'altitude':
+                yvals = np.array([x['GPS'][0]['alt'] for x in S_with_GPS])/1000.
+                ax_lines[ind].plot(dts_gps, yvals,markerface, markersize=markersize, label=a, alpha=markeralpha)
+                ax_lines[ind].set_ylabel('Altitude\n[km]', rotation=0, labelpad=30)
+                ax_lines[ind].set_ylim([450,500])
+            elif a in 'dt':
+                ax_lines[ind].plot(dts_gps, T - T_gps,markerface, markersize=markersize, label=a, alpha=markeralpha)
+                ax_lines[ind].set_ylabel(r't$_{header}$ - t$_{GPS}$',  rotation=0, labelpad=30)
+            elif a in 'velocity':
+                ax_lines[ind].plot(dts_gps, vel,markerface, markersize=markersize, alpha=markeralpha, label='Velocity')
+                ax_lines[ind].set_ylabel('Velocity\n[km/sec]', rotation=0, labelpad=30)
+                ax_lines[ind].set_ylim([5,10])
+            elif a in 'Lshell':
+                # This way using a precomputed lookup table:
+                with open('Lshell_dict.pkl','rb') as file:
+                    Ldict = pickle.load(file)
+                L_interp = interp2d(Ldict['glon'], Ldict['glat'], Ldict['L'], kind='cubic')
+                Lshell = np.array([L_interp(x,y) for x,y in zip(lons, lats)])
+                
+                ax_lines[ind].plot(dts_gps, Lshell,markerface, markersize=markersize,  alpha=markeralpha, label='L shell')
+                ax_lines[ind].set_ylabel('L shell', rotation=0, labelpad=30)
+                ax_lines[ind].set_ylim([1,8])
 
-    fig.autofmt_xdate()
+        fig.autofmt_xdate()
 
 
-    for a in ax_lines[:-1]:
-        a.set_xticklabels([])
-        
-    # Link line plot x axes:
-    for a in ax_lines:
-        ax_lines[0].get_shared_x_axes().join(ax_lines[0], a)
+        for a in ax_lines[:-1]:
+            a.set_xticklabels([])
+            
+        # Link line plot x axes:
+        for a in ax_lines:
+            ax_lines[0].get_shared_x_axes().join(ax_lines[0], a)
 
-    # Link data x axes:
-    ax_lines[0].get_shared_x_axes().join(ax_lines[0], ax1)
-    ax_lines[0].get_shared_x_axes().join(ax_lines[0], ax2)
+        # Link data x axes:
+        ax_lines[0].get_shared_x_axes().join(ax_lines[0], ax1)
+        ax_lines[0].get_shared_x_axes().join(ax_lines[0], ax2)
 
-    ax_lines[-1].set_xticklabels(ax_lines[-1].get_xticklabels(), rotation=30)
-    ax_lines[-1].xaxis.set_major_formatter(formatter)
-    ax_lines[-1].set_xlabel("Time (H:M:S) on \n%s"%datetime.datetime.utcfromtimestamp(T[0]).strftime("%Y-%m-%d"))
+        ax_lines[-1].set_xticklabels(ax_lines[-1].get_xticklabels(), rotation=30)
+        ax_lines[-1].xaxis.set_major_formatter(formatter)
+        ax_lines[-1].set_xlabel("Time (H:M:S) on \n%s"%datetime.datetime.utcfromtimestamp(T[0]).strftime("%Y-%m-%d"))
 
 
-    ax_lines[-1].set_xlim([np.min(dts), np.max(dts)])
-    fig.subplots_adjust(left=0.1, right=0.95, top=0.9, bottom=0.1)
+        ax_lines[-1].set_xlim([np.min(dts), np.max(dts)])
+
+
+    fig.subplots_adjust(left=0.1, right=0.95, top=0.9, bottom=0.12)
     fig.suptitle(f"VPM Survey Data\n {dts[0].strftime('%D%, %H:%m:%S')} -- {dts[-1].strftime('%D%, %H:%m:%S')}")
 
     
 
 
-    # Enable click events on the map:
-    def onpick(event):
-        ''' Event handler for a point click '''
-        ind = event.ind
-        t_center = dts[ind[0]]
-        logger.info(f't = {t_center}')
-        ax_lines[-1].set_xlim(t_center - datetime.timedelta(minutes=15), t_center + datetime.timedelta(minutes=15))
-        fig.canvas.draw()
-
-
-    tx, ty = m(-175,-60)
-    m_ax.text(tx, ty, 'Click to zoom')
-
-    cid= fig.canvas.mpl_connect('pick_event', lambda event: onpick(event))
 
 def plot_burst_data(parent, burst, cal_file=None):
 
@@ -508,7 +587,7 @@ def plot_burst_data(parent, burst, cal_file=None):
 
     # A list of bursts!
     # for ind, burst in enumerate(B_data):
-# for burst in [B_data[1]]:
+    # for burst in [B_data[1]]:
     logger.debug(burst['config'])
     cfg = burst['config']
 
@@ -539,7 +618,7 @@ def plot_burst_data(parent, burst, cal_file=None):
         logger.warning(f'No bbr configuration found')
         bbr_config = None
 
-# ---------- Calibration coefficients ------
+    # ---------- Calibration coefficients ------
     ADC_max_value = 32768. # 16 bits, twos comp
     ADC_max_volts = 1.0    # ADC saturates at +- 1 volt
 
@@ -571,7 +650,7 @@ def plot_burst_data(parent, burst, cal_file=None):
 
 
     if cfg['TD_FD_SELECT'] == 1:
-# --------- Time domain plots  -----------
+    # --------- Time domain plots  -----------
 
         gs = GS.GridSpec(2, 3, width_ratios=[20, 20, 1],  wspace = 0.2, hspace = 0.1)
         E_TD = fig.add_subplot(gs[0,0])
@@ -680,7 +759,7 @@ def plot_burst_data(parent, burst, cal_file=None):
 
 
     elif cfg['TD_FD_SELECT'] == 0:
-# --------- Frequency domain plots  -----------
+    # --------- Frequency domain plots  -----------
         gs = GS.GridSpec(2, 2, width_ratios=[20, 1],  wspace = 0.05, hspace = 0.05)
         E_FD = fig.add_subplot(gs[0,0])
         B_FD = fig.add_subplot(gs[1,0], sharex=E_FD, sharey=E_FD)
