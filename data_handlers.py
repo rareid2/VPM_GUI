@@ -513,7 +513,7 @@ def decode_packets_CSV(data_root, filename):
         raw_data = []
         for row in reader:
             try:
-                if row['TARGET'] == 'VPM_STORED' and row['PACKET'] == 'PAYLOAD_INTERFACE_RECEIVE_RAW_PAYLOAD_DATA':
+                if ('VPM' in row['TARGET']) and row['PACKET'] == 'PAYLOAD_INTERFACE_RECEIVE_RAW_PAYLOAD_DATA':
                     timestamps.append(row['UTC_TIME'])
                     raw_data.append(bytes.fromhex(row['DYNAMIC_DATA']))
             except:

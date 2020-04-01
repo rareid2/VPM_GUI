@@ -98,11 +98,6 @@ def read_survey_XML(filename):
         header_timestamp_isoformat = S.attrib['header_timestamp']
         d['header_timestamp'] = datetime.datetime.fromisoformat(header_timestamp_isoformat).replace(tzinfo=datetime.timezone.utc).timestamp()
 
-    # if d:
-    #     logging.info(f'survey keys: {d.keys()}')
-    # else:
-    #     logging.info(f'No survey entries found')
-
     # Return a list of dicts
     return outs
 

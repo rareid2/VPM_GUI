@@ -145,7 +145,7 @@ class GUI(tk.Frame):
         self.label.grid(row=0, column=0, rowspan=4, columnspan=ncols, sticky='ew')
 
         self.logo = tk.PhotoImage(file='logo.png').subsample(12,12)
-        self.logo_button = tk.Button(self.root, image=self.logo)
+        self.logo_button = tk.Button(self.root, image=self.logo, command=self.display_help)
         self.logo_button.grid(row=0, column=0, rowspan=4, sticky='w')
 
         self.burst_packet_text = tk.StringVar()
@@ -175,20 +175,15 @@ class GUI(tk.Frame):
         # -------------- Decode packets -------------
 
         # text fields
-        # self.in_dir = os.getcwd()
+        
         self.in_dir = tk.StringVar()
-        self.in_dir.set('/Users/austin/Dropbox/VPM working directory/Python GSS/Data/SCBA Deployment 10 Mar 2020')
-        # self.out_dir = os.path.join(os.getcwd(), 'output')
+        # self.in_dir.set('/Users/austin/Dropbox/VPM working directory/VPM Data/')
+        self.in_dir.set(os.getcwd())
+
         self.out_dir = tk.StringVar()
-        self.out_dir.set('/Users/austin/Dropbox/VPM working directory/Python GSS/output/derp/')
+        # self.out_dir.set('/Users/austin/Dropbox/VPM working directory/Python GSS/output/')
+        self.out_dir.set(os.path.join(os.getcwd(), 'output'))
 
-
-        # self.in_dir_text = tk.Text(self.root, height=1, width=80, highlightthickness=1, highlightbackground='grey')
-        # self.in_dir_text = tk.Text(self.root, height=1, width=80, highlightthickness=1, highlightbackground='grey')
-
-        # self.in_dir_text.grid(row=decoding_row+2, column=1, columnspan = 2, sticky='ew')
-        # self.in_dir_text.insert(tk.END, self.in_dir)
-        # self.in_dir_text.configure(state='disabled')
         self.in_dir_text = tk.Label(self.root, textvariable = self.in_dir, borderwidth=2)
         self.in_dir_text.grid(row=decoding_row+2, column=1, columnspan = 2, sticky='w')
 
@@ -754,7 +749,14 @@ class GUI(tk.Frame):
         self.update_time_fields()
         return True
 
+    def display_help(self):
+        self.help_window = tk.Toplevel(self.root)
+        self.help_window.pack_propagate(0)
 
+        helpstr = ' ------ VPM Ground Support Software ------\n' + \
+                  '            GUI widget help ' 
+        self.help_msg = tk.Message(self.help_window, anchor='center', text=helpstr, width=80)
+        self.help_msg.pack()
 
     # def show_status_messages_window(self):
     #     self.stat_window = tk.Toplevel(self.root)

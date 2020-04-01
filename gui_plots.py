@@ -484,6 +484,20 @@ def plot_survey_data_and_metadata(parent, S_data,
 
         # tx, ty = m(-175,-60)
         # m_ax.text(tx, ty, 'Click to zoom')
+        # ----- 3.30.2020: Here's a start on implementing a callback for when the line plots are zoomed
+        # (to mask off the points on the map)
+        
+        # def onzoom(axis):
+        #     # Update the map to only show points within range:
+
+        #     [t1, t2] = axis.get_xlim()
+        #     d1 = mdates.num2date(t1).replace(tzinfo=None)
+        #     d2 = mdates.num2date(t2).replace(tzinfo=None)
+        #     hits = ((dates >= d1) & (dates <= d2))
+
+        #     logger.info(f'zoomed to {d1}, {d2} ({len(hits)} hits)')
+        #     s.set_array(np.nan*(~np.array(hits)))
+        # ax1.callbacks.connect('xlim_changed', onzoom)
 
         cid= fig.canvas.mpl_connect('pick_event', lambda event: onpick(event))
     # -----------------------------------
