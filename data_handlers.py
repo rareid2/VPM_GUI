@@ -9,7 +9,7 @@ import csv
 import scipy.stats
 import itertools
 
-
+global console_log
 
 def decode_status(packets):
     '''
@@ -28,6 +28,7 @@ def decode_status(packets):
     '''
 
     logger = logging.getLogger(__name__)
+
 
     out_data = []
 
@@ -437,10 +438,7 @@ def decode_packets_TLM(data_root, fname):
             bytecount_index= packet_length_post_escape + check_escaped + count_escaped - 6
      
             # Decode metadata fields
-            packet_start_index = (cur_packet[PACKET_COUNT_INDEX]     << 24) + \
-                                 (cur_packet[PACKET_COUNT_INDEX + 1] << 16) + \
-                                 (cur_packet[PACKET_COUNT_INDEX + 2] << 8)  + \
-                                  cur_packet[PACKET_COUNT_INDEX + 3]
+            packet_start_index = struct.unpack('>L',cur_packet[PACKET_COUNT_INDEX:(PACKET_COUNT_INDEX + 4)])[0]
 
             datatype = chr(cur_packet[DATA_TYPE_INDEX]) # works!
             experiment_number = cur_packet[EXPERIMENT_INDEX]
@@ -450,9 +448,8 @@ def decode_packets_TLM(data_root, fname):
 
             if (checksum - checksum_calc) != 0:
                 checksum_failure_counter += 1
-                # print('invalid checksum at packet # %d'%x)
-                # print(cur_packet)
-
+                logger.warning('invalid checksum at packet # %d -- skipping'%x)
+                continue
             # Pack the decoded packet into a dictionary, and add it to the list
             # (maybe there's a nicer data structure for this - but this is probably the most general case)
             p = dict()
@@ -493,7 +490,9 @@ def decode_packets_CSV(data_root, filename):
         (e.g., the KSat file format)
 
     '''
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger()
+    # logger = logging.getLogger("gui.decode_pa")
+
     fpath = os.path.join(data_root, filename)
     header_string = 'TARGET,PACKET,UTC_TIME,DYNAMIC_DATA,'  # In case the format changes...
 
@@ -569,7 +568,8 @@ def decode_packets_CSV(data_root, filename):
 
             if (checksum - checksum_calc) != 0:
                 checksum_failure_counter += 1
-                print('invalid checksum at packet # %d'%ind)
+                logger.warning('invalid checksum at packet # %d -- skipping'%ind)
+                continue
 
 
             # Pack the decoded packet into a dictionary, and add it to the list
@@ -583,17 +583,16 @@ def decode_packets_CSV(data_root, filename):
             p['checksum_verify'] = (checksum - checksum_calc)==0
             p['packet_length'] = packet_length_post_escape
             p['fname'] = filename
-    #         p['header_ns'] = C_nanoseconds
-    #         p['header_epoch_sec'] = C_epoch_seconds
-    #         p['header_reboots'] = C_reboot_count
             p['header_timestamp'] = datetime.datetime.fromisoformat(timestamp[0:-1]).replace(tzinfo=datetime.timezone.utc).timestamp()
-
+            p['file_index'] = ind # Order of arrival in file 
             packets.append(p)
         except:
             logger.warning('exception at packet # %d',ind)
         
     if checksum_failure_counter > 0:
         logger.warning(f'--------------- {checksum_failure_counter} failed checksums ---------------')
+
+    logger.info(f'decoded {len(packets)} packets')
 
     return packets
 
@@ -669,7 +668,8 @@ def decode_burst_data_by_experiment_number(packets, burst_cmd = None, burst_puls
 
     completed_bursts = []
 
-    if burst_cmd is not None:
+    if (burst_cmd is not None) and (len(burst_cmd) > 0 ) and (burst_cmd is not "burst command"):
+        logger.info(f'Using manually-provided burst command {burst_cmd}')
         # Use externally-provided burst command, if present
         burst_config = decode_burst_command(burst_cmd)
         burst_config['burst_pulses'] = burst_pulses
@@ -682,11 +682,22 @@ def decode_burst_data_by_experiment_number(packets, burst_cmd = None, burst_puls
         current_packets = list(itertools.compress(burst_packets, filt_inds))
         cur_G_packets   = list(filter(lambda p: p['dtype']=='G', current_packets))
         header_timestamps = sorted([p['header_timestamp'] for p in current_packets])
-        
+
+        # # The burst command is echoed at the top of each GPS packet, if we have any
+        # if (burst_config is None) and cur_G_packets:
+        #     for gg in cur_G_packets:
+        #         if gg['start_ind'] ==0:
+        #             cmd_gps = np.flip(gg['data'][0:3])
+
+        #     # Get burst configuration parameters:
+        #     logger.info(f'Found burst command {cmd_gps} in GPS packet')
+        #     burst_config = decode_burst_command(cmd_gps)
+        #     burst_config['burst_pulses'] = burst_pulses
+
             
         processed = process_burst(current_packets, burst_config)
         processed['header_timestamp'] = header_timestamps[0]
-
+        processed['experiment_number'] = e_num
         completed_bursts.append(processed)
         burst_packets = list(itertools.compress(burst_packets, np.logical_not(filt_inds)))
         logger.info(f"{len(burst_packets)} packets remaining")
@@ -737,6 +748,7 @@ def decode_burst_data_in_range(packets, ta, tb, burst_cmd = None, burst_pulses =
             processed['ta'] = ta
             processed['tb'] = tb
             processed['header_timestamp'] = header_timestamps[0]
+            processed['experiment_number'] = e_num
 
             completed_bursts.append(processed)
             burst_packets = list(itertools.compress(burst_packets, np.logical_not(filt_inds)))
@@ -825,6 +837,8 @@ def decode_burst_data_between_status_packets(packets):
                 processed['status'] = decode_status([IA, IB])
                 processed['bbr_config'] = decode_uBBR_command(processed['status'][0]['prev_bbr_command'])
                 processed['header_timestamp'] = ta
+                processed['experiment_number'] = e_num
+                
                 completed_bursts.append(processed)
 
                 
@@ -897,10 +911,10 @@ def process_burst(packets, burst_config=None):
             if g['start_ind'] == 0:
                 cmd = np.flip(g['data'][0:3])
                 gps_echoed_cmds.append(cmd)
-
         if gps_echoed_cmds:
             # Check that they're all the same, if we have more entries...
             cmd = gps_echoed_cmds[0]
+            logger.info(f'Recovered command {cmd} from GPS packets')
             burst_config = decode_burst_command(cmd)
         else:
             logger.warning("no GPS packets found; cannot determine burst command")                
@@ -938,8 +952,8 @@ def process_burst(packets, burst_config=None):
         E = FD_reassemble(E_data)
         B = FD_reassemble(B_data)
 
-    logger.debug(f'Reassembled E has length {len(E)}, with {np.sum(np.isnan(E))} nans. Raw E missing {np.sum(np.isnan(E_data))} values.')
-    logger.debug(f'Reassembled B has length {len(B)}, with {np.sum(np.isnan(B))} nans. Raw B missing {np.sum(np.isnan(B_data))} values.')
+    logger.debug(f'Reassembled E has length {len(E)}, with {np.sum(np.isnan(E)):,d} nans. Raw E missing {np.sum(np.isnan(E_data)):,d} values.')
+    logger.debug(f'Reassembled B has length {len(B)}, with {np.sum(np.isnan(B)):,d} nans. Raw B missing {np.sum(np.isnan(B_data)):,d} values.')
     logger.debug(f'expected {int(n_samples)} samples')
 
     if len(E)!=int(n_samples):
@@ -1102,7 +1116,7 @@ def decode_GPS_data(data):
 
     return outs
 
-def decode_survey_data(packets):
+def decode_survey_data(packets, separation_time = 4.5):
     '''
     Author:     Austin Sousa
                 austin.sousa@colorado.edu
@@ -1118,6 +1132,8 @@ def decode_survey_data(packets):
 
     inputs: 
         packets: A list of "packet" dictionaries, as returned from decode_packets.py
+        separation_time: The maximum time, in seconds, between packet arrivals
+                for which we'll group by experiment number.
     outputs:
         A list of dictionaries:
         Each dictionary is a single survey column, and contains the following fields:
@@ -1168,7 +1184,7 @@ def decode_survey_data(packets):
     S_data = []
     complete_surveys = []
     unused = []
-    separation_time = 0.5  # seconds
+    # separation_time = 4.5 # 0.5  # seconds
     for e_num in e_nums:
 
         # Reassemble into a single survey data packet

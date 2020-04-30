@@ -22,6 +22,7 @@ import math
 try:
     from mpl_toolkits.basemap import Basemap
 except:
+    # Basemap has trouble finding proj_lib correctly - here's an automated fix
     import os
     import conda
 
@@ -32,7 +33,7 @@ except:
     from mpl_toolkits.basemap import Basemap
 # from mpl_toolkits.basemap import Basemap
 from scipy.interpolate import interp1d, interp2d
-
+from mpl_toolkits.basemap.solar import daynight_terminator
 
 def packet_inspector(parent, packets):
     logger = logging.getLogger(__name__)
@@ -122,6 +123,23 @@ def packet_inspector(parent, packets):
 
 
     return True
+
+def is_day(t, lats, lons):
+    # Determine whether or not the satellite is on the dayside.
+    # We're using the day-nite terminator function from Basemap.
+
+    tlons, tlats, tau, dec = daynight_terminator(t, 1.1, -180, 180)
+
+    # Lon to lat interpolator
+    interpy = interp1d(tlons, tlats,'linear', fill_value='extrapolate')
+    thresh_lats = interpy(lons)
+    
+    if dec > 0: 
+        dayvec = lats > thresh_lats
+    else:
+        dayvec = lats < thresh_lats
+        
+    return dayvec
 
 def plot_survey_data(parent, S_data, cal_file=None, E_gain=False, B_gain=False, bus_timestamps=False):
     '''
@@ -319,12 +337,11 @@ def plot_survey_data(parent, S_data, cal_file=None, E_gain=False, B_gain=False, 
 
 def plot_survey_data_and_metadata(parent, S_data, 
     line_plots = ['Lshell','altitude','velocity','lat','lon','used_sats','solution_status','solution_type'],
-    cal_file=None, E_gain=False, B_gain=False, bus_timestamps=False, plot_map = True):
+    cal_file=None, E_gain=False, B_gain=False, bus_timestamps=False, plot_map = True, t1 = None, t2 = None):
     # Only import Basemap for this function -- not sure if AFRL can install it yet
 
 
-    logger = logging.getLogger(__name__)
-
+    logger = logging.getLogger("gui.gui_plots.plot_survey_data_and_metadata")
     figure_window = tk.Toplevel(parent)
 
     fig = Figure(figsize=(12,8))
@@ -350,53 +367,56 @@ def plot_survey_data_and_metadata(parent, S_data,
     # colormap -- parula is a clone of the Matlab colormap; also try plt.cm.jet or plt.cm.viridis
     cm = parula(); #plt.cm.viridis;
 
+    # Sort by header timestamps
+    S_data = sorted(S_data, key = lambda f: f['header_timestamp'])
 
     # Subset of data with GPS stamps included.
     # We need these for the line plots, regardless if we're using payload or bus timestamps.
-    S_with_GPS = list(filter(lambda x: 'timestamp' in x['GPS'][0], S_data))
+    S_with_GPS = list(filter(lambda x: (('GPS' in x) and 
+                                        ('timestamp' in x['GPS'][0])), S_data))
+    S_with_GPS = sorted(S_with_GPS, key = lambda f: f['GPS'][0]['timestamp'])
+
+    logger.info(f'{len(S_with_GPS)} GPS packets')
     T_gps = np.array([x['GPS'][0]['timestamp'] for x in S_with_GPS])
     dts_gps = np.array([datetime.datetime.fromtimestamp(x, tz=datetime.timezone.utc) for x in T_gps])
-
 
     # Build arrays
     E = []
     B = []
+    T = []
     F = np.arange(512)*40/512;
     
     # # Only plot survey data if we have GPS data to match
-    # S_filt = list(filter(lambda x: 'timestamp' in x['GPS'][0], S_data))
     if bus_timestamps:
         logger.info('Using bus timestamps')
-        # Sort using bus timestamp (finer resolution, but includes transmission error
-        # from payload to bus)
-        T = np.array([x['header_timestamp'] for x in S_data])
-        dts = np.array([datetime.datetime.fromtimestamp(x, tz=datetime.timezone.utc) for x in T])
-        for S in sorted(S_data, key = lambda f: f['header_timestamp']):
+        # Sort using bus timestamp (finer resolution, but 
+        # includes transmission error from payload to bus)
+        for S in S_data:
+            T.append(S['header_timestamp'])
             E.append(S['E_data'])
             B.append(S['B_data'])
     else:
         logger.info('using payload timestamps')
-        # Sort using payload GPS timestamp (rounded to nearest second)
-        T = T_gps
-        dts = dts_gps
-        for S in sorted(S_with_GPS, key = lambda f: f['GPS'][0]['timestamp']):
+        # Sort using payload GPS timestamp (rounded to nearest second.
+        # Ugh, why didn't we just save a local microsecond counter... do that on CANVAS please)
+        for S in S_with_GPS:
+            T.append(S['header_timestamp'])
             E.append(S['E_data'])
             B.append(S['B_data'])
+    T = np.array(T)
 
+    dates = np.array([datetime.datetime.utcfromtimestamp(t) for t in T])
 
+    if t1 is None:
+        t1 = dates[0]
+    if t2 is None:
+        t2 = dates[-1]
 
     # -----------------------------------
     # Spectrograms
     # -----------------------------------
     E = np.array(E); B = np.array(B); T = np.array(T);
     logger.debug(f'E has shape {np.shape(E)}, B has shape {np.shape(B)}')
-
-    # # Sort by time vector:
-    # # (This may cause issues if the GPS card is off, since everything restarts at 1/6/1980 without a lock.
-    # # The spacecraft timestamp will be accurate enough when bursts are NOT being taken, but things will get
-    # # weird during a burst, since the data will have sat in the payload SRAM for a bit before receipt.)
-    # sort_inds = np.argsort(T)
-    # E = E[sort_inds, :]; B = B[sort_inds, :]; T = T[sort_inds];
 
     # gs_data = GS.GridSpec(2, 2, width_ratios=[20, 1], wspace = 0.05, hspace = 0.05, subplot_spec=gs_root[1])
     ax1 = fig.add_subplot(gs_data[0,0])
@@ -407,16 +427,19 @@ def plot_survey_data_and_metadata(parent, S_data,
     e_clims = [50,255] #[0,255] #[-80,-40]
     b_clims = [150,255] #[0,255] #[-80,-40]
 
-    t_edges = np.insert(T, 0, T[0] - 26)
-    dates = np.array([datetime.datetime.utcfromtimestamp(t) for t in t_edges])
+    date_edges = np.insert(dates, 0, dates[0] - datetime.timedelta(seconds=26))
 
     # Insert columns of NaNs wherever we have gaps in data (dt > 27 sec)
     per_sec = 26 # Might want to look this up for the shorter survey modes
-    gaps = np.where(np.diff(dates) > datetime.timedelta(seconds=(per_sec+2)))[0]
-    d_gapped = np.insert(dates, gaps + 1, dates[gaps] + datetime.timedelta(seconds=per_sec))
-    E_gapped = np.insert(E.astype('float'), gaps + 1, np.nan*np.ones([1,512]), axis=0)
-    B_gapped = np.insert(B.astype('float'), gaps + 1, np.nan*np.ones([1,512]), axis=0)
+    gaps = np.where(np.diff(date_edges) > datetime.timedelta(seconds=(per_sec+2)))[0]
 
+    d_gapped = np.insert(dates, gaps, dates[gaps] - datetime.timedelta(seconds=per_sec + 3))
+    E_gapped = np.insert(E.astype('float'), gaps - 1, np.nan*np.ones([1,512]), axis=0)
+    B_gapped = np.insert(B.astype('float'), gaps - 1, np.nan*np.ones([1,512]), axis=0)
+
+    print("d with gaps")
+    for kk in range(len(d_gapped)):
+        print(f'{d_gapped[kk]}, {np.sum(np.isnan(E_gapped[kk,:]))}')
 
     # Plot E data
     p1 = ax1.pcolormesh(d_gapped,F,E_gapped.T, vmin=e_clims[0], vmax=e_clims[1], shading='flat', cmap = cm);
@@ -426,7 +449,7 @@ def plot_survey_data_and_metadata(parent, S_data,
     cb1.set_label(f'Raw value [{e_clims[0]}-{e_clims[1]}]')
     cb2.set_label(f'Raw value [{b_clims[0]}-{b_clims[1]}]')
 
-    # vertical lines at each edge (kinda nice, but messy for big plots)
+    # # vertical lines at each edge (kinda nice, but messy for big plots)
     # g1 = ax1.vlines(dates, 0, 40, linewidth=0.2, alpha=0.5, color='w')
     # g2 = ax2.vlines(dates, 0, 40, linewidth=0.2, alpha=0.5, color='w')
 
@@ -434,10 +457,11 @@ def plot_survey_data_and_metadata(parent, S_data,
     ax1.set_ylim([0,40])
     ax2.set_ylim([0,40])
 
-    formatter = mdates.DateFormatter('%H:%M:%S')
+    formatter = mdates.DateFormatter('%m/%d/%Y %H:%M:%S')
     ax2.xaxis.set_major_formatter(formatter)
     fig.autofmt_xdate()
-    ax2.set_xlabel("Time (H:M:S) on \n%s"%datetime.datetime.utcfromtimestamp(T[0]).strftime("%Y-%m-%d"))
+    # ax2.set_xlabel("Time (H:M:S) on \n%s"%datetime.datetime.utcfromtimestamp(T[0]).strftime("%Y-%m-%d"))
+    ax2.set_xlabel("Time (m/d/Y H:M:S)")
 
     ax1.set_ylabel('E channel\nFrequency [kHz]')
     ax2.set_ylabel('B channel\nFrequency [kHz]')
@@ -464,14 +488,14 @@ def plot_survey_data_and_metadata(parent, S_data,
         m.drawmeridians(np.arange(m.lonmin,m.lonmax+30,60),labels=[0,0,1,0]);
         m.drawmapboundary(fill_color='cyan');
         m.fillcontinents(color='white',lake_color='cyan');
-        s = m.scatter(sx,sy,c=T_gps, marker='.', s=10, cmap = get_cmap('plasma'), zorder=100, picker=5)
 
-        # cb = m.colorbar(s, location='bottom', label='Time')
-
-        # ticks = [T[0], T[-1]]
-        # cb.set_ticks(ticks)
-        # tl = [datetime.datetime.fromtimestamp(x, tz=datetime.timezone.utc).strftime('%D\n%H:%m:%S') for x in cb.get_ticks()]
-        # cb.set_ticklabels(tl)
+        # This is sloppy -- we need to stash the scatterplot in a persistent object,
+        # but because this is just a script and not a class, it vanishes. So we're
+        # sticking it into the top figure for now.
+        m_ax.s = m.scatter(sx,sy,c=T_gps, marker='.', s=10, cmap = get_cmap('plasma'), zorder=100, picker=5)
+        
+        hits = np.where(dates >= datetime.datetime(1979,1,1,0,0,0))
+        logger.debug(hits)
 
         # Enable click events on the map:
         def onpick(event):
@@ -480,24 +504,34 @@ def plot_survey_data_and_metadata(parent, S_data,
             t_center = dts[ind[0]]
             logger.info(f't = {t_center}')
             ax_lines[-1].set_xlim(t_center - datetime.timedelta(minutes=15), t_center + datetime.timedelta(minutes=15))
+            onzoom(ax1)
             fig.canvas.draw()
 
         # tx, ty = m(-175,-60)
         # m_ax.text(tx, ty, 'Click to zoom')
         # ----- 3.30.2020: Here's a start on implementing a callback for when the line plots are zoomed
         # (to mask off the points on the map)
-        
-        # def onzoom(axis):
-        #     # Update the map to only show points within range:
 
-        #     [t1, t2] = axis.get_xlim()
-        #     d1 = mdates.num2date(t1).replace(tzinfo=None)
-        #     d2 = mdates.num2date(t2).replace(tzinfo=None)
-        #     hits = ((dates >= d1) & (dates <= d2))
+        def onzoom(axis, *args, **kwargs):
+            # Update the map to only show points within range:
+            [tt1, tt2] = axis.get_xlim()
+            d1 = mdates.num2date(tt1)
+            d2 = mdates.num2date(tt2)
+            hits = np.where((dts_gps >= d1) & (dts_gps <= d2))[0]
+            
+            logger.debug(f'zoomed to {d1}, {d2} ({len(hits)} hits)')
+            try:
+                m_ax.s.remove()
+            except:
+                logger.debug('failed to remove scatter points')
 
-        #     logger.info(f'zoomed to {d1}, {d2} ({len(hits)} hits)')
-        #     s.set_array(np.nan*(~np.array(hits)))
-        # ax1.callbacks.connect('xlim_changed', onzoom)
+            m_ax.s = m.scatter(np.array(sx)[hits],np.array(sy)[hits],c=T_gps[hits], marker='.', s=10, cmap = get_cmap('plasma'), zorder=100, picker=5)
+
+            # return onzoom
+
+        # Attach callback
+        ax1.callbacks.connect('xlim_changed', onzoom)
+        # ax2.callbacks.connect('xlim_changed', onzoom)
 
         cid= fig.canvas.mpl_connect('pick_event', lambda event: onpick(event))
     # -----------------------------------
@@ -508,7 +542,6 @@ def plot_survey_data_and_metadata(parent, S_data,
 
         ax_lines = []
 
-        # print(S_data[0]['GPS'][0].keys())
         for ind, a in enumerate(line_plots):
             ax_lines.append(fig.add_subplot(gs_lineplots[ind]))
 
@@ -534,15 +567,25 @@ def plot_survey_data_and_metadata(parent, S_data,
                 ax_lines[ind].set_ylabel('Velocity\n[km/sec]', rotation=0, labelpad=30)
                 ax_lines[ind].set_ylim([5,10])
             elif a in 'Lshell':
-                # This way using a precomputed lookup table:
-                with open('Lshell_dict.pkl','rb') as file:
-                    Ldict = pickle.load(file)
-                L_interp = interp2d(Ldict['glon'], Ldict['glat'], Ldict['L'], kind='cubic')
-                Lshell = np.array([L_interp(x,y) for x,y in zip(lons, lats)])
-                
-                ax_lines[ind].plot(dts_gps, Lshell,markerface, markersize=markersize,  alpha=markeralpha, label='L shell')
-                ax_lines[ind].set_ylabel('L shell', rotation=0, labelpad=30)
-                ax_lines[ind].set_ylim([1,8])
+                try:
+                    # This way using a precomputed lookup table:
+                    with open(os.path.join('resources','Lshell_dict.pkl'),'rb') as file:
+                        Ldict = pickle.load(file)
+                    L_interp = interp2d(Ldict['glon'], Ldict['glat'], Ldict['L'], kind='cubic')
+                    Lshell = np.array([L_interp(x,y) for x,y in zip(lons, lats)])
+                    
+                    ax_lines[ind].plot(dts_gps, Lshell,markerface, markersize=markersize,  alpha=markeralpha, label='L shell')
+                    ax_lines[ind].set_ylabel('L shell', rotation=0, labelpad=30)
+                    ax_lines[ind].set_ylim([1,8])
+                except:
+                    logger.warning('Missing resources/Lshell_dict.pkl')
+            elif a in 'daylight':
+                # Day or night based on ground track, using the daynight terminator from Basemap
+                dayvec = np.array([is_day(x, y, z) for x,y,z in zip(dts_gps, lats, lons)])
+                ax_lines[ind].plot(dts_gps, dayvec, markerface, markersize=markersize,  alpha=markeralpha, label='Day / Night')
+                ax_lines[ind].set_yticks([False, True])
+                ax_lines[ind].set_yticklabels(['Night','Day'])
+
 
         fig.autofmt_xdate()
 
@@ -554,6 +597,7 @@ def plot_survey_data_and_metadata(parent, S_data,
         for a in ax_lines:
             ax_lines[0].get_shared_x_axes().join(ax_lines[0], a)
 
+
         # Link data x axes:
         ax_lines[0].get_shared_x_axes().join(ax_lines[0], ax1)
         ax_lines[0].get_shared_x_axes().join(ax_lines[0], ax2)
@@ -562,12 +606,17 @@ def plot_survey_data_and_metadata(parent, S_data,
         ax_lines[-1].xaxis.set_major_formatter(formatter)
         ax_lines[-1].set_xlabel("Time (H:M:S) on \n%s"%datetime.datetime.utcfromtimestamp(T[0]).strftime("%Y-%m-%d"))
 
+        # Set the x limits to ignore cases without a lock (e.g., 1/6/1980...)
+        # xlims = [np.min(dts[dts > datetime.datetime(2018,1,1,0,0,0, tzinfo=datetime.timezone.utc)]),
+        #          np.max(dts[dts > datetime.datetime(2018,1,1,0,0,0, tzinfo=datetime.timezone.utc)])]
+        # ax_lines[-1].set_xlim(xlims)
 
-        ax_lines[-1].set_xlim([np.min(dts), np.max(dts)])
+        ax_lines[-1].set_xlim([t1,t2])
 
 
     fig.subplots_adjust(left=0.1, right=0.95, top=0.9, bottom=0.12)
-    fig.suptitle(f"VPM Survey Data\n {dts[0].strftime('%D%, %H:%m:%S')} -- {dts[-1].strftime('%D%, %H:%m:%S')}")
+    # fig.suptitle(f"VPM Survey Data\n {dts[0].strftime('%D%, %H:%m:%S')} -- {dts[-1].strftime('%D%, %H:%m:%S')}")
+    fig.suptitle(f"VPM Survey Data\n {t1.strftime('%D%, %H:%m:%S')} -- {t2.strftime('%D%, %H:%m:%S')}")
 
     
 
@@ -670,7 +719,7 @@ def plot_burst_data(parent, burst, cal_file=None):
         E_TD = fig.add_subplot(gs[0,0])
         B_TD = fig.add_subplot(gs[1,0], sharex=E_TD)
         E_FD = fig.add_subplot(gs[0,1], sharex=E_TD)
-        B_FD = fig.add_subplot(gs[1,1], sharex=E_FD)
+        B_FD = fig.add_subplot(gs[1,1], sharex=E_FD, sharey=E_FD)
         cb1  = fig.add_subplot(gs[0,2])
         cb2  = fig.add_subplot(gs[1,2])
 
@@ -698,7 +747,10 @@ def plot_burst_data(parent, burst, cal_file=None):
         # Get the timestamp at the beginning of the burst.
         # GPS timestamps are taken at the end of each contiguous recording.
         # (I think "samples on" is still undecimated, regardless if decimation is being used...)
-        start_timestamp = datetime.datetime.utcfromtimestamp(burst['G'][0]['timestamp']) - datetime.timedelta(seconds=float(cfg['SAMPLES_ON']/fs))
+        if len(burst['G']) > 0:
+            start_timestamp = datetime.datetime.utcfromtimestamp(burst['G'][0]['timestamp']) - datetime.timedelta(seconds=float(cfg['SAMPLES_ON']/fs))
+        else:
+            start_timestamp = datetime.datetime.utcfromtimestamp(0)
 
         # the "samples on" and "samples off" values are counting at the full rate, not the decimated rate.
         sec_on  = cfg['SAMPLES_ON']/fs
@@ -765,13 +817,16 @@ def plot_burst_data(parent, burst, cal_file=None):
         cb.set_label(f'dB[{B_unit_string}]')
 
         if bbr_config:
-            fig.suptitle('Time-Domain Burst\n%s - n = %d, %d on / %d off\nE gain = %s, E filter = %s, B gain = %s, B filter = %s'
-                %(start_timestamp, cfg['burst_pulses'], sec_on, sec_off, bbr_config['E_GAIN'], bbr_config['E_FILT'], bbr_config['B_GAIN'], bbr_config['B_FILT']))
+            title_str = ['Time-Domain Burst\n%s - n = %d, %d on / %d off\nE gain = %s, E filter = %s, B gain = %s, B filter = %s'
+                %(start_timestamp, cfg['burst_pulses'], sec_on, sec_off, bbr_config['E_GAIN'], bbr_config['E_FILT'], bbr_config['B_GAIN'], bbr_config['B_FILT'])][0]
+
         else:
-            fig.suptitle('Time-Domain Burst\n%s - n = %d, %d on / %d off'
-                %(start_timestamp, cfg['burst_pulses'], sec_on, sec_off))
+            title_str = 'Time-Domain Burst\n%s - n = %d, %d on / %d off'%(start_timestamp, cfg['burst_pulses'], sec_on, sec_off)
 
+        if 'experiment_number' in burst:
+            title_str = title_str+f"\n Exp num = {burst['experiment_number']}"
 
+        fig.suptitle(title_str)
     elif cfg['TD_FD_SELECT'] == 0:
     # --------- Frequency domain plots  -----------
         gs = GS.GridSpec(2, 2, width_ratios=[20, 1],  wspace = 0.05, hspace = 0.05)
@@ -892,3 +947,39 @@ def plot_burst_data(parent, burst, cal_file=None):
                 %(start_timestamp, cfg['burst_pulses'], sec_on, sec_off))
 
 
+if __name__ == "__main__":
+    from file_handlers import read_survey_XML
+    import logging
+
+
+    logging.basicConfig(level=logging.DEBUG, format='[%(name)s]\t%(levelname)s\t%(message)s')
+    logging.getLogger('matplotlib').setLevel(logging.WARNING)
+
+    infile = "/Users/austin/Dropbox/VPM working directory/VPM Data/survey/2020/03/14/VPM_survey_data_2020-03-14.xml"
+    survey_products = read_survey_XML(infile)
+    print(len(survey_products))
+
+    lines_to_do = ['lat', 'lon', 'altitude','Lshell', 'tracked_sats','daylight']
+
+    root = tk.Tk()
+
+    w = tk.Label(root, text="Hello, world!")
+    w.pack()
+
+    # gui = GUI(root)
+
+    # print(survey_products[0])
+    # print(survey_products[-1])
+    s1 = datetime.datetime.utcfromtimestamp(survey_products[0]['GPS'][0]['timestamp'])
+    s2 = datetime.datetime.utcfromtimestamp(survey_products[-1]['GPS'][0]['timestamp'])
+    plot_survey_data_and_metadata(root, survey_products,
+    lines_to_do, cal_file=None, 
+    plot_map = True,
+    E_gain=0,
+    B_gain=0, 
+    bus_timestamps=False,
+    t1 = s1, t2 = s2)
+
+    root.mainloop()
+
+    # gui.root.mainloop()

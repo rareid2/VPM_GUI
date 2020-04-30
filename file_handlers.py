@@ -51,20 +51,22 @@ def write_survey_XML(in_data, filename='survey_data.xml'):
 
         entry = ET.SubElement(d, 'survey')
         entry.set('header_timestamp',datetime.datetime.utcfromtimestamp(entry_data['header_timestamp']).isoformat())
-        E_elem = ET.SubElement(entry, 'E_data')
-        B_elem = ET.SubElement(entry, 'B_data')
-        GPS_elem= ET.SubElement(entry,'GPS')
-        E_elem.text = np.array2string(entry_data['E_data'], max_line_width=1000000000000, separator=',')[1:-2]
-        B_elem.text = np.array2string(entry_data['B_data'], max_line_width=1000000000000, separator=',')[1:-2]
 
+        if 'E_data' in entry_data:
+            E_elem = ET.SubElement(entry, 'E_data')
+            E_elem.text = np.array2string(entry_data['E_data'], max_line_width=1000000000000, separator=',')[1:-1]
+        if 'B_data' in entry_data:        
+            B_elem = ET.SubElement(entry, 'B_data')
+            B_elem.text = np.array2string(entry_data['B_data'], max_line_width=1000000000000, separator=',')[1:-1]
+        
         if 'GPS' in entry_data:
+            GPS_elem= ET.SubElement(entry,'GPS')
             for k, v in entry_data['GPS'][0].items():
-
                 cur_item = ET.SubElement(GPS_elem,k)
                 cur_item.text = str(v)
-        # header_entry = ET.SubElement(GPS_elem,'header_timestamp')
-        # header_entry.text = '{0:f}'.format(entry_data['header_timestamp'])
-
+        
+        if 'exp_num' in entry_data:
+            entry.set('exp_num', f"{(entry_data['exp_num'])}")            
     rough_string = ET.tostring(d, 'utf-8')
     reparsed = MD.parseString(rough_string).toprettyxml(indent="\t")
 
@@ -98,6 +100,8 @@ def read_survey_XML(filename):
         header_timestamp_isoformat = S.attrib['header_timestamp']
         d['header_timestamp'] = datetime.datetime.fromisoformat(header_timestamp_isoformat).replace(tzinfo=datetime.timezone.utc).timestamp()
 
+        if 'exp_num' in S.attrib:
+            d['exp_num'] = int(S.attrib['exp_num'])
     # Return a list of dicts
     return outs
 
@@ -117,6 +121,9 @@ def write_burst_XML(in_data, filename='burst_data.xml'):
         entry = ET.SubElement(d, 'burst')
         entry.set('header_timestamp',datetime.datetime.utcfromtimestamp(entry_data['header_timestamp']).isoformat())
         
+        if 'experiment_number' in entry_data:
+            entry.set('experiment_number', f"{entry_data['experiment_number']}")
+            
         if 'config' in entry_data:
             # Configuration entries
             cfg = ET.SubElement(entry, 'burst_config')
