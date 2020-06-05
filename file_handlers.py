@@ -230,7 +230,7 @@ def read_burst_XML(filename):
             # print(cfg)
             # print(el.tag, el.text)
             # # for el in cfg:
-                # print(el.name, el.text)
+                # print(el.name, el.text)   
             if el.tag in ['str', 'BINS']:
                 d['config'][el.tag] = el.text
             else:
@@ -244,23 +244,23 @@ def read_burst_XML(filename):
 
         TD_FD_SELECT = d['config']['TD_FD_SELECT']
 
-        # Load data fields
+        # Load data fields -- as dtype "float" to preserve NaNs
         if TD_FD_SELECT == 1:
             # Time domain
             logger.debug('Selected time domain')
-            d['E'] = np.fromstring(S.find('E_data').text, dtype='int16', sep=',')
-            d['B'] = np.fromstring(S.find('B_data').text, dtype='int16', sep=',')
+            d['E'] = np.fromstring(S.find('E_data').text, dtype='float', sep=',')
+            d['B'] = np.fromstring(S.find('B_data').text, dtype='float', sep=',')
 
         elif TD_FD_SELECT == 0:
             # Frequency domain
             logger.debug('Selected frequency domain')
-            ER = np.fromstring(S.find('E_data').find('real').text, dtype='int16', sep=',')
-            EI = np.fromstring(S.find('E_data').find('imag').text, dtype='int16', sep=',')
+            ER = np.fromstring(S.find('E_data').find('real').text, dtype='float', sep=',')
+            EI = np.fromstring(S.find('E_data').find('imag').text, dtype='float', sep=',')
             logger.debug(f'ER: {np.shape(ER)}, EI: {np.shape(EI)}')
             d['E'] = ER + 1j*EI
             
-            BR = np.fromstring(S.find('B_data').find('real').text, dtype='int16', sep=',')
-            BI = np.fromstring(S.find('B_data').find('imag').text, dtype='int16', sep=',')
+            BR = np.fromstring(S.find('B_data').find('real').text, dtype='float', sep=',')
+            BI = np.fromstring(S.find('B_data').find('imag').text, dtype='float', sep=',')
             d['B'] = BR + 1j*BI
 
         logger.info(f"loaded E data of size {len(d['E'])}")

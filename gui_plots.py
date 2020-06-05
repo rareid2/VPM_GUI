@@ -10,8 +10,9 @@ import datetime
 import logging
 from data_handlers import decode_burst_command, decode_status
 from parula_colormap import parula
+from compute_ground_track import *
 
-
+from configparser import ConfigParser
 import pickle
 import matplotlib.gridspec as GS
 import matplotlib.dates as mdates
@@ -437,10 +438,6 @@ def plot_survey_data_and_metadata(parent, S_data,
     E_gapped = np.insert(E.astype('float'), gaps - 1, np.nan*np.ones([1,512]), axis=0)
     B_gapped = np.insert(B.astype('float'), gaps - 1, np.nan*np.ones([1,512]), axis=0)
 
-    print("d with gaps")
-    for kk in range(len(d_gapped)):
-        print(f'{d_gapped[kk]}, {np.sum(np.isnan(E_gapped[kk,:]))}')
-
     # Plot E data
     p1 = ax1.pcolormesh(d_gapped,F,E_gapped.T, vmin=e_clims[0], vmax=e_clims[1], shading='flat', cmap = cm);
     p2 = ax2.pcolormesh(d_gapped,F,B_gapped.T, vmin=b_clims[0], vmax=b_clims[1], shading='flat', cmap = cm);
@@ -501,7 +498,7 @@ def plot_survey_data_and_metadata(parent, S_data,
         def onpick(event):
             ''' Event handler for a point click '''
             ind = event.ind
-            t_center = dts[ind[0]]
+            t_center = dates[ind[0]]
             logger.info(f't = {t_center}')
             ax_lines[-1].set_xlim(t_center - datetime.timedelta(minutes=15), t_center + datetime.timedelta(minutes=15))
             onzoom(ax1)
@@ -750,8 +747,9 @@ def plot_burst_data(parent, burst, cal_file=None):
         if len(burst['G']) > 0:
             start_timestamp = datetime.datetime.utcfromtimestamp(burst['G'][0]['timestamp']) - datetime.timedelta(seconds=float(cfg['SAMPLES_ON']/fs))
         else:
-            start_timestamp = datetime.datetime.utcfromtimestamp(0)
+            start_timestamp = 'None' #datetime.datetime.utcfromtimestamp(0)
 
+        header_timestamp = datetime.datetime.utcfromtimestamp(burst['header_timestamp'])
         # the "samples on" and "samples off" values are counting at the full rate, not the decimated rate.
         sec_on  = cfg['SAMPLES_ON']/fs
         sec_off = cfg['SAMPLES_OFF']/fs
@@ -816,12 +814,11 @@ def plot_burst_data(parent, burst, cal_file=None):
         ce.set_label(f'dB[{E_unit_string}]')
         cb.set_label(f'dB[{B_unit_string}]')
 
+        title_str = f'Time-Domain Burst - n = %d, %d on / %d off'%(cfg['burst_pulses'], sec_on, sec_off) +\
+                    f'\nGPS time: %s Header time: %s'%(start_timestamp, header_timestamp)
+    
         if bbr_config:
-            title_str = ['Time-Domain Burst\n%s - n = %d, %d on / %d off\nE gain = %s, E filter = %s, B gain = %s, B filter = %s'
-                %(start_timestamp, cfg['burst_pulses'], sec_on, sec_off, bbr_config['E_GAIN'], bbr_config['E_FILT'], bbr_config['B_GAIN'], bbr_config['B_FILT'])][0]
-
-        else:
-            title_str = 'Time-Domain Burst\n%s - n = %d, %d on / %d off'%(start_timestamp, cfg['burst_pulses'], sec_on, sec_off)
+            title_str += '\nE gain = %s, E filter = %s, B gain = %s, B filter = %s'%(bbr_config['E_GAIN'], bbr_config['E_FILT'], bbr_config['B_GAIN'], bbr_config['B_FILT'])
 
         if 'experiment_number' in burst:
             title_str = title_str+f"\n Exp num = {burst['experiment_number']}"
@@ -945,6 +942,116 @@ def plot_burst_data(parent, burst, cal_file=None):
         else:
             fig.suptitle('Frequency-Domain Burst\n%s - n = %d, %d on / %d off'
                 %(start_timestamp, cfg['burst_pulses'], sec_on, sec_off))
+
+    # # If we have any GPS data, let's plot those on the map in a separate window:
+    # if parent.show_map.get() and len(burst['G']) > 0:
+    #     plot_burst_map(parent,burst(['G']))
+
+def plot_burst_map(parent, gps_data, 
+        show_terminator = True, plot_trajectory=True, show_transmitters=True):
+    print(f"{len(gps_data)} burst entries")
+    print(gps_data)
+    figure_window = tk.Toplevel(parent)
+
+    fig = Figure(figsize=(12,7))
+
+    canvas = FigureCanvasTkAgg(fig, master=figure_window)  # A tk.DrawingArea.
+    canvas.draw()
+    canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+
+    toolbar = NavigationToolbar2Tk(canvas, figure_window)
+    toolbar.update()
+    canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+
+    m_ax = fig.add_subplot(1,1,1)
+
+    m = Basemap(projection='mill',lon_0=0,ax=m_ax, llcrnrlon=-180,llcrnrlat=-70,urcrnrlon=180,urcrnrlat=70)
+
+    lats = [x['lat'] for x in gps_data]
+    lons = [x['lon'] for x in gps_data]
+    T_gps = np.array([x['timestamp'] for x in gps_data])
+
+    print(lons)
+    print(lats)
+    print(T_gps)
+
+    sx,sy = m(lons, lats)
+
+    m.drawcoastlines(color='k',linewidth=1,ax=m_ax);
+    m.drawparallels(np.arange(-90,90,30),labels=[1,0,0,0]);
+    m.drawmeridians(np.arange(m.lonmin,m.lonmax+30,60),labels=[0,0,1,0]);
+    m.drawmapboundary(fill_color='cyan');
+    m.fillcontinents(color='white',lake_color='cyan');
+
+    if show_terminator:
+        try:
+            # Find the median timestamp to use:
+            avg_ts = np.mean([k['timestamp'] for k in gps_data if k['time_status'] > 20])
+
+            CS=m.nightshade(datetime.datetime.utcfromtimestamp(avg_ts))
+        except:
+            logger.warning('Problem plotting day/night terminator')
+
+    if plot_trajectory:
+        try:
+            TLE = ["1 45120U 19071K   20153.15274580 +.00003602 +00000-0 +11934-3 0  9995",
+                   "2 45120 051.6427 081.8638 0012101 357.8092 002.2835 15.33909680018511"]
+            # try:
+            avg_ts = np.mean([k['timestamp'] for k in gps_data if k['time_status'] > 20])
+            t_mid = datetime.datetime.utcfromtimestamp(avg_ts)
+            t1 = t_mid - datetime.timedelta(minutes=15)
+            t2 = t_mid + datetime.timedelta(minutes=15)
+
+            traj, tvec = compute_ground_track(TLE, t1, t2, tstep=datetime.timedelta(seconds=10))
+
+            tlats = traj[:,1]
+            tlons = traj[:,0]
+            simtime = [x.replace(tzinfo=datetime.timezone.utc).timestamp() for x in tvec]
+
+            mid_ind = np.argmin(np.abs(np.array(tvec) - t_mid))
+            zx,zy = m(tlons, tlats)
+            z = m.scatter(zx,zy,c=simtime, marker='.', s=10, alpha=0.5, cmap = get_cmap('plasma'), zorder=100, label='TLE')
+
+            z2 =m.scatter(zx[mid_ind], zy[mid_ind],edgecolor='k', marker='*',s=50, zorder=101, label='Center (TLE)')
+        except:
+            logger.warning('Problem plotting ground track from TLE')
+
+    if show_transmitters:
+        call_sign_config = ConfigParser()
+        
+        fp = open('nb_transmitters.conf')
+        call_sign_config.read_file(fp)
+        fp.close()
+
+        for tx_name, vals in call_sign_config.items('NB_Transmitters'):
+            vv = vals.split(',')
+            tx_freq = float(vv[0])
+            tx_lat  = float(vv[1])
+            tx_lon  = float(vv[2])
+            print(tx_name, tx_freq)
+            px,py = m(tx_lon, tx_lat)
+            p = m.scatter(px,py, marker='p', s=20, color='r',zorder=99)
+            name_str = '{:s}  \n{:0.1f}  '.format(tx_name.upper(), tx_freq/1000)
+            m_ax.text(px, py, name_str, fontsize=8, fontweight='bold', ha='left',
+                va='bottom', color='k', label='TX')
+        p.set_label('TX')
+    s = m.scatter(sx,sy,c=T_gps, marker='o', s=20, cmap = get_cmap('plasma'), zorder=100, label='GPS')
+    
+    m_ax.legend()
+
+    gstr = ''
+    for entry in gps_data:
+        time = datetime.datetime.strftime(datetime.datetime.utcfromtimestamp(entry['timestamp']),'%D %H:%M:%S')
+        tloc = entry['time_status'] > 20
+        ploc = entry['solution_status'] ==0
+        gstr+= '{:s} ({:1.2f}, {:1.2f}): time lock: {:b} position lock: {:b}\n'.format(time, entry['lat'], entry['lon'], tloc,ploc)
+    
+    fig.text(.5, 0, gstr, ha='center', va='bottom')
+
+    fig.tight_layout()
+    
+
+
 
 
 if __name__ == "__main__":

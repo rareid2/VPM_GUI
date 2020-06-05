@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import pickle
+import gzip
 import queue
 import tkinter as tk # Python 3.x
 import tkinter.scrolledtext as ScrolledText
@@ -85,6 +86,8 @@ class GUI(tk.Frame):
 
     # This class defines the graphical user interface             
     def __init__(self, parent, *args, **kwargs):
+
+        # ----------------------- GUI setup ---------------------------
         tk.Frame.__init__(self, parent, *args, **kwargs)
         self.root = parent
 
@@ -132,22 +135,22 @@ class GUI(tk.Frame):
 
 
         # ---- Static version ----
-        # Console window:
-        # Add text widget to display logging info
-        self.st = ScrolledText.ScrolledText(self.root, state='disabled')
-        self.st.configure(borderwidth=4, relief='flat', font='TkFixedFont')
-        self.st.grid(row=nrows, column=0, columnspan=nrows, sticky='ew')
-        self.st.tag_config('INFO', foreground='black')
-        self.st.tag_config('DEBUG', foreground='gray')
-        self.st.tag_config('WARNING', foreground='orange')
-        self.st.tag_config('ERROR', foreground='red')
-        self.st.tag_config('CRITICAL', foreground='red', underline=1)
-        # # # Create textLogger
-        text_handler = TextHandler(self.st)
+        # # Console window:
+        # # Add text widget to display logging info
+        # self.st = ScrolledText.ScrolledText(self.root, state='disabled')
+        # self.st.configure(borderwidth=4, relief='flat', font='TkFixedFont')
+        # self.st.grid(row=nrows, column=0, columnspan=nrows, sticky='ew')
+        # self.st.tag_config('INFO', foreground='black')
+        # self.st.tag_config('DEBUG', foreground='gray')
+        # self.st.tag_config('WARNING', foreground='orange')
+        # self.st.tag_config('ERROR', foreground='red')
+        # self.st.tag_config('CRITICAL', foreground='red', underline=1)
+        # # # # Create textLogger
+        # text_handler = TextHandler(self.st)
         
-        # # # Add the handler to logger
+        # # # # Add the handler to logger
         logger = logging.getLogger()        
-        logger.addHandler(text_handler)
+        # logger.addHandler(text_handler)
 
         # data fields
         self.packets = [] # Decoded packets from telemetry
@@ -199,7 +202,7 @@ class GUI(tk.Frame):
 
         self.file_format = tk.StringVar()
         self.available_formats =['XML','Pickle','Matlab']
-        self.file_suffixes =    ['xml','nc','pkl','mat']
+        self.file_suffixes =    ['xml','pkl','mat']
         self.file_format.set(self.available_formats[0])
         self.file_suffix = tk.StringVar()
         self.file_suffix.set(self.file_suffixes[0])
@@ -207,7 +210,7 @@ class GUI(tk.Frame):
         # self.survey_outfile.set('survey_data' + '.' + self.file_suffix.get())
         # self.burst_outfile.set('burst_data' + '.' + self.file_suffix.get())
 
-        self.cal_file = (self.runpath,'resources','calibration_data.pkl')
+        self.cal_file = os.path.join(self.runpath,'resources','calibration_data.pkl')
 
         # Build GUI
         self.root.title('VPM Ground Support Software')
@@ -393,7 +396,7 @@ class GUI(tk.Frame):
 
         
 
-        # ----------- Plot data ----------
+        # ----------- Plot survey data ----------
         ttk.Separator(self.root, orient="horizontal").grid(row=plot_row, column=0, columnspan=ncols, sticky='ew')
         tk.Label(self.root, text="Plot Survey Data:",  font=('Helvetica', 14, 'bold')).grid(row=plot_row+1, column=0, columnspan=1, sticky='w')
 
@@ -458,6 +461,8 @@ class GUI(tk.Frame):
         self.s2_entry.grid(row = plot_row +8, column=3, sticky='ew')
         self.s2_entry.insert(0,'YYYY-MM-DDTHH:MM:SS')
 
+
+        # ----------- Plot burst data ----------
         ttk.Separator(self.root, orient="horizontal").grid(row=plot_row + 9, column=0, columnspan=ncols, sticky='ew')
         tk.Label(self.root, text="Plot Burst Data:",  font=('Helvetica', 14, 'bold')).grid(row=plot_row+11, column=0, columnspan=1, sticky='w')
              
@@ -467,21 +472,38 @@ class GUI(tk.Frame):
         self.load_calibration_button = tk.Button(self.root, text="Load calibration data", command=self.load_calibration)
         self.load_calibration_button.grid(row=plot_row+13, column=4, sticky='ewn')
 
-        # self.status_button = tk.Button(self.root, text="View Status Messages", command=self.show_status_messages_window)
-        # self.status_button.grid(row=plot_row+12, column=1, sticky='n')
+        self.plot_burst_map_button = tk.Button(self.root, text = "Plot burst map", command=self.call_burst_map)
+        self.plot_burst_map_button.grid(row=plot_row+14, column=4, sticky='ewn')
 
+        self.burst_checkboxes = ['plot terminator','plot trajectory','show transmitters']
+
+        self.burst_check_vars = dict()
+        for x in self.burst_checkboxes:
+            self.burst_check_vars[x] = tk.BooleanVar()
+            self.burst_check_vars[x].set(True)
+
+        self.burst_chks = [tk.Checkbutton(self.root, text = self.burst_checkboxes[x],
+                          variable = self.burst_check_vars[self.burst_checkboxes[x]])
+                          for x in range(len(self.burst_checkboxes))]
+
+        for ind, k in enumerate(self.burst_chks[0:2]):
+            k.grid(row=plot_row + 12, column=ind, sticky='w')
+        for ind, k in enumerate(self.burst_chks[2:]):
+            k.grid(row=plot_row + 13, column=ind, sticky='w')
+         
         tk.Label(self.root, text="Available bursts:",  font=('Helvetica', 12)).grid(row=plot_row+11, column=2, sticky='ew')
         self.plot_burst_button = tk.Button(self.root, text="Plot Burst Data", command=self.call_plot_burst)
         self.plot_burst_button.grid(row=plot_row+11, column=4, sticky='ewn')
 
         self.listbox = tk.Listbox(self.root, height=3, width=30, selectmode = tk.EXTENDED)
         self.listbox.grid(row = plot_row + 12, column = 2, columnspan=2, rowspan=3)
+
+        # Run some updaters. eh, this should be done in a callback, but... shrug
         self.update_burst_list()
         self.update_counters()
 
-        # self.root.after(100, self.update_burst_list)
-        # self.root.after(100, self.update_counters)
 
+    # ----------------------- Actions ---------------------------
     def load_calibration(self):
         logging.info('Selecting calibration file')
         self.cal_file = filedialog.askopenfilename(initialdir=os.getcwd())
@@ -692,6 +714,11 @@ class GUI(tk.Frame):
             with open(fname,'rb') as file:
                 self.packets = pickle.load(file)
 
+        if fname and fname.endswith(".pklz"):
+            logger.info(f'Opening {fname}')
+            with gzip.open(fname,'rb') as file:
+                self.packets = pickle.load(file)
+
             self.packet_len_text.set(f"{len(self.packets)} packets loaded")
         
         return
@@ -752,8 +779,27 @@ class GUI(tk.Frame):
 
         for ind in self.listbox.curselection():        
             logging.info(f'Plotting burst {ind}')
-            plot_burst_data(self.root, self.burst_products[int(ind)], self.cal_file)
+            cur_burst = self.burst_products[int(ind)]
+            plot_burst_data(self.root, cur_burst, self.cal_file)
 
+
+    def call_burst_map(self):
+        if not self.burst_products:
+            logging.info(f'No burst data present')
+            return
+        burst_index = self.listbox.curselection()
+
+        for ind in self.listbox.curselection():        
+            logging.info(f'Plotting burst map {ind}')
+            cur_burst = self.burst_products[int(ind)]
+
+            if len(cur_burst['G']) > 0:
+                plot_burst_map(self.root, cur_burst['G'],
+                show_terminator   = self.burst_check_vars['plot terminator'].get(),
+                plot_trajectory   = self.burst_check_vars['plot trajectory'].get(),
+                show_transmitters = self.burst_check_vars['show transmitters'].get())
+
+ 
     def select_out_directory(self):
         logging.info("you pushed the button!") 
         self.out_dir.set(filedialog.askdirectory(initialdir=self.out_dir.get()))
@@ -821,7 +867,10 @@ class GUI(tk.Frame):
                 elif self.burst_mode.get() in 'Group by Experiment Number':
                 #     # Bin bursts by experiment number
                     burst_cmd = self.get_burst_command()
-                    n_pulses = int(self.repeats_entry.get())
+                    try:
+                        n_pulses = int(self.repeats_entry.get())
+                    except:
+                        n_pulses = None
                     logger.info(f'Processing bursts by experiment number')
                     B_data, unused_burst = decode_burst_data_by_experiment_number(self.packets, 
                                            burst_cmd = burst_cmd, burst_pulses = n_pulses)
@@ -970,13 +1019,20 @@ def main():
 
     console_log = logging.getLogger()
 
-    # ----- Automatic actions (for debugging) -----
-    infile = "/Users/austin/Dropbox/VPM working directory/VPM Data/tmp/survey_data.xml"
-    gui.survey_products.extend(read_survey_XML(infile))
+    # # ----- Automatic actions (for debugging) -----
+    # infile = "/Users/austin/Dropbox/VPM working directory/VPM Data/tmp/survey_data.xml"
+    # gui.survey_products.extend(read_survey_XML(infile))
+    # gui.update_counters()
+    # gui.update_survey_time_fields()
+
+    infile = "/Users/austin/afrl/vpm/data/2020-05-20_2/outputs/burst_data.xml"
+    gui.burst_products.extend(read_burst_XML(infile))
     gui.update_counters()
     gui.update_survey_time_fields()
+    gui.update_burst_list()
 
-    gui.call_plot_survey()
+    # gui.call_plot_burst()
+    # gui.call_plot_survey()
 
 
     gui.root.mainloop()
