@@ -712,12 +712,12 @@ class GUI(tk.Frame):
         if fname and fname.endswith(".pkl"):
             logger.info(f'Opening {fname}')
             with open(fname,'rb') as file:
-                self.packets = pickle.load(file)
+                self.packets.extend(pickle.load(file))
 
         if fname and fname.endswith(".pklz"):
             logger.info(f'Opening {fname}')
             with gzip.open(fname,'rb') as file:
-                self.packets = pickle.load(file)
+                self.packets.extend(pickle.load(file))
 
             self.packet_len_text.set(f"{len(self.packets)} packets loaded")
         
@@ -1025,11 +1025,11 @@ def main():
     # gui.update_counters()
     # gui.update_survey_time_fields()
 
-    infile = "/Users/austin/afrl/vpm/data/2020-05-20_2/outputs/burst_data.xml"
-    gui.burst_products.extend(read_burst_XML(infile))
-    gui.update_counters()
-    gui.update_survey_time_fields()
-    gui.update_burst_list()
+    # infile = "/Users/austin/afrl/vpm/data/2020-05-20_2/outputs/burst_data.xml"
+    # gui.burst_products.extend(read_burst_XML(infile))
+    # gui.update_counters()
+    # gui.update_survey_time_fields()
+    # gui.update_burst_list()
 
     # gui.call_plot_burst()
     # gui.call_plot_survey()

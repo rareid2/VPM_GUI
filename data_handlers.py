@@ -1242,3 +1242,28 @@ def decode_survey_data(packets, separation_time = 4.5):
     # Send it
     logger.info(f'Recovered {len(S_data)} survey products, leaving {len(unused)} unused packets')
     return S_data, unused
+
+
+def unique_entries(in_list):
+    # Python doesn't like to compare complex entries (dicts containing dicts, numpy arrays)
+    # So we're explicitly generating a hash of the entry, by casting the whole thing to a string.
+    # It's slow but probably works!
+    
+    # 1. compute hash
+    for el in in_list:
+        # Here's a quick and dirty hash function. Might fail on nested dictionaries,
+        # since we're only sorting the top-level dictionary (e.g., the GPS entries might
+        # come up in a different order)
+        el['id'] = hash(str(sorted(el.items())))
+    
+    # 2. build a temporary dictionary of values, with hash as key
+    temp = list({v['id']: v for v in in_list}.values())
+    
+    # 3. ditch the hash, for cleanliness:
+    #    - Pop from in_list, not temp, since the elements themselves
+    #      are identified by reference. If we pop from temp, we'll leave
+    #      'id' elements in the duplicate entries.
+    for el in in_list:
+        el.pop('id')
+    
+    return temp
