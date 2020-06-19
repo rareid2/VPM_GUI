@@ -12,77 +12,13 @@ from tkinter import ttk
 from data_handlers import *  # Data processing modules
 from file_handlers import *  # Loading and writing modules
 from gui_plots import *      # Plotting modules
+from db_handlers import get_packets_within_range
 import datetime
 import dateutil
-from scipy.io import savemat
-
-class TextHandler(logging.Handler):
-    # This class allows you to log to a Tkinter Text or ScrolledText widget
-    # Adapted from Moshe Kaplan: https://gist.github.com/moshekaplan/c425f861de7bbf28ef06
-
-    def __init__(self, text):
-        # run the regular Handler __init__
-        logging.Handler.__init__(self)
-        self.setLevel(level=logging.INFO)
-        # Store a reference to the Text it will log to
-        self.text = text
-        formatter = logging.Formatter('[%(name)s]\t%(levelname)s\t%(message)s')
-        self.setFormatter(formatter)
-
-    def emit(self, record):
-        msg = self.format(record)
-        def append():
-            self.text.configure(state='normal')
-            self.text.insert(tk.END, msg + '\n')
-            self.text.configure(state='disabled')
-            # Autoscroll to the bottom
-            self.text.yview(tk.END)
-        # This is necessary because we can't modify the Text from other threads
-        self.text.after(0, append)
-
-class QueueHandler(logging.Handler):
-    """Class to send logging records to a queue
-
-    It can be used from different threads
-    The ConsoleUi class polls this queue to display records in a ScrolledText widget
-    """
-    # Example from Moshe Kaplan: https://gist.github.com/moshekaplan/c425f861de7bbf28ef06
-    # (https://stackoverflow.com/questions/13318742/python-logging-to-tkinter-text-widget) is not thread safe!
-    # See https://stackoverflow.com/questions/43909849/tkinter-python-crashes-on-new-thread-trying-to-log-on-main-thread
-
-    def __init__(self, log_queue):
-        super().__init__()
-        self.log_queue = log_queue
-
-    def emit(self, record):
-        self.log_queue.put(record)
-
-
-
+from scipy.io import savemat, loadmat
 
 
 class GUI(tk.Frame):
-
-
-    # def display(self, record):
-    #     msg = self.queue_handler.format(record)
-    #     self.st.configure(state='normal')
-    #     self.st.insert(tk.END, msg + '\n', record.levelname)
-    #     self.st.configure(state='disabled')
-    #     # Autoscroll to the bottom
-    #     self.st.yview(tk.END)
-
-    # def poll_log_queue(self):
-    #     # print('polling log queue')
-    #     # Check every 100ms if there is a new message in the queue to display
-    #     while True:
-    #         try:
-    #             record = self.log_queue.get(block=False)
-    #         except queue.Empty:
-    #             break
-    #         else:
-    #             self.display(record)
-    #     self.root.after(100, self.poll_log_queue)
 
     # This class defines the graphical user interface             
     def __init__(self, parent, *args, **kwargs):
@@ -100,57 +36,17 @@ class GUI(tk.Frame):
 
 
         ncols = 5
-        nrows = 40
+        nrows = 50
         decoding_row = 5
-        process_row = 12
-        save_row = 20
-
-        plot_row = 25
+        process_row = 15
+        save_row = 25
+        plot_row = 35
 
 
         self.grid(column=ncols, row=nrows, sticky='ew')
 
         logging.basicConfig(level=logging.DEBUG, format='[%(name)s]\t%(levelname)s\t%(message)s')
         logging.getLogger('matplotlib').setLevel(logging.WARNING)
-
-#         # ---- Live version ----
-#         self.st = ScrolledText.ScrolledText(self.root, state='disabled', height=12)
-#         self.st.configure(borderwidth=4, relief='flat', font='TkFixedFont')
-#         self.st.grid(row=nrows, column=0, columnspan=nrows, sticky='ew')
-#         self.st.tag_config('INFO', foreground='black')
-#         self.st.tag_config('DEBUG', foreground='gray')
-#         self.st.tag_config('WARNING', foreground='orange')
-#         self.st.tag_config('ERROR', foreground='red')
-#         self.st.tag_config('CRITICAL', foreground='red', underline=1)
-#         # Create a logging handler using a queue
-#         self.log_queue = queue.Queue()
-#         self.queue_handler = QueueHandler(self.log_queue)
-#         formatter = logging.Formatter('%(asctime)s: %(message)s')
-#         self.queue_handler.setFormatter(formatter)
-
-#         logger = logging.getLogger("gui")
-#         logger.addHandler(self.queue_handler)
-# #         # Start polling messages from the queue
-#         self.root.after(100, self.poll_log_queue)
-
-
-        # ---- Static version ----
-        # # Console window:
-        # # Add text widget to display logging info
-        # self.st = ScrolledText.ScrolledText(self.root, state='disabled')
-        # self.st.configure(borderwidth=4, relief='flat', font='TkFixedFont')
-        # self.st.grid(row=nrows, column=0, columnspan=nrows, sticky='ew')
-        # self.st.tag_config('INFO', foreground='black')
-        # self.st.tag_config('DEBUG', foreground='gray')
-        # self.st.tag_config('WARNING', foreground='orange')
-        # self.st.tag_config('ERROR', foreground='red')
-        # self.st.tag_config('CRITICAL', foreground='red', underline=1)
-        # # # # Create textLogger
-        # text_handler = TextHandler(self.st)
-        
-        # # # # Add the handler to logger
-        logger = logging.getLogger()        
-        # logger.addHandler(text_handler)
 
         # data fields
         self.packets = [] # Decoded packets from telemetry
@@ -171,24 +67,16 @@ class GUI(tk.Frame):
         self.in_progress_file.set('in_progress.pkl')
 
         self.burst_mode = tk.StringVar()
-        self.burst_choices = ['Group by Status Packets','Group by Experiment Number','Group by Timestamps']
+        self.burst_choices = ['Group by Status Packets','Group by Trailing Status Packet','Group by Experiment Number','Group by Timestamps']
         self.do_burst = tk.BooleanVar()
         self.do_survey = tk.BooleanVar()
         self.plot_map = tk.BooleanVar()
-
-        # self.survey_outfile = tk.StringVar()
-        # self.burst_outfile = tk.StringVar()
-        # self.status_outfile = tk.StringVar()
 
         self.burst_mode.set(self.burst_choices[0])
         self.do_burst.set(True)
         self.do_survey.set(True)
         self.plot_map.set(True)
                    
-        # self.line_plot_fields = ['Lshell','altitude','velocity','lat','lon','used_sats','solution_status','solution_type']
-        # self.line_plot_fields = ['lat', 'lon', 'altitude','velocity','Lshell', 'tracked_sats',
-        #                         'used_sats','time_status', 'receiver_status', 'weeknum', 'sec_offset', 'solution_status',
-        #                         'solution_type','horiz_speed', 'vert_speed', 'ground_track', 'latency', 'timestamp', 'header_timestamp']
         self.line_plot_fields = ['lat', 'lon', 'altitude','velocity','Lshell', 'tracked_sats',
                                 'used_sats','time_status', 'receiver_status', 'weeknum', 'sec_offset', 'solution_status',
                                 'solution_type','horiz_speed', 'vert_speed', 'ground_track', 'daylight', 'timestamp', 'header_timestamp']
@@ -207,18 +95,11 @@ class GUI(tk.Frame):
         self.file_suffix = tk.StringVar()
         self.file_suffix.set(self.file_suffixes[0])
 
-        # self.survey_outfile.set('survey_data' + '.' + self.file_suffix.get())
-        # self.burst_outfile.set('burst_data' + '.' + self.file_suffix.get())
-
         self.cal_file = os.path.join(self.runpath,'resources','calibration_data.pkl')
 
         # Build GUI
         self.root.title('VPM Ground Support Software')
         self.root.option_add('*tearOff', 'FALSE')
-
-
-        logger.info("Hi!")
-
 
         self.header_text = tk.StringVar()
         self.header_text.set("VPM Ground Support Software\nFancy GUI")
@@ -245,7 +126,7 @@ class GUI(tk.Frame):
         self.sep.grid(row=decoding_row, column=0, columnspan=ncols, sticky='ew')
         
         self.sec1_text = tk.StringVar()
-        self.sec1_text.set("Decode raw telemetry:")
+        self.sec1_text.set("Load packets from raw telemetry:")
         self.sec1_label = tk.Label(self.root, textvariable=self.sec1_text,  font=('Helvetica', 14, 'bold'))
         self.sec1_label.grid(row=decoding_row + 1, column=0, columnspan=ncols-1, sticky='w')
 
@@ -256,64 +137,75 @@ class GUI(tk.Frame):
         # -------------- Decode packets -------------
 
         # text fields
-        
         self.in_dir = tk.StringVar()
-        # self.in_dir.set('/Users/austin/Dropbox/VPM working directory/VPM Data/')
         self.in_dir.set(os.getcwd())
 
         self.out_dir = tk.StringVar()
-        # self.out_dir.set('/Users/austin/Dropbox/VPM working directory/Python GSS/output/')
         self.out_dir.set(os.path.join(os.getcwd(), 'output'))
 
-        self.in_dir_text = tk.Label(self.root, textvariable = self.in_dir, borderwidth=2)
-        self.in_dir_text.grid(row=decoding_row+2, column=1, columnspan = 2, sticky='w')
-
-        self.out_dir_text= tk.Label(self.root, textvariable = self.out_dir)
-        self.out_dir_text.grid(row=decoding_row +3, column=1, columnspan = 2, sticky='w')
-        
-        self.in_progress_text= tk.Label(self.root,textvariable= self.in_progress_file)
-        self.in_progress_text.grid(row=decoding_row + 4, column=1, columnspan = 2, sticky='w')
-
-        tk.Label(self.root, text="Input Directory:",).grid(row=decoding_row + 2, column=0, sticky='e')
-        tk.Label(self.root, text="Output Directory:",).grid(row=decoding_row + 3, column=0, sticky='e')
-        tk.Label(self.root, text="Cache File:",).grid(row=decoding_row + 4, column=0, sticky='e')
-
-
+        self.packet_db = tk.StringVar()
+        self.packet_db.set('no db selected')
 
         # buttons
-        self.load_button = tk.Button(self.root, text="Select Input Directory", command=self.select_in_directory)
-        self.load_button.grid(row=decoding_row+2, column=3, sticky='ew')
-        self.out_button = tk.Button(self.root, text="Select Output Directory", command=self.select_out_directory)
-        self.out_button.grid(row=decoding_row+3, column=3, sticky='ew')
-        self.decode_button = tk.Button(self.root, text="Decode Telemetry", command=self.process_packets)
-        self.decode_button.grid(row=decoding_row +2, column=4, sticky='ew')
-        self.load_prev_button = tk.Button(self.root, text="Load Pickle File", command=self.load_previous_packets)
-        self.load_prev_button.grid(row=decoding_row+3, column=4, sticky='ew')  
-        self.cached_data_button = tk.Button(self.root, text="Select Packet Cache", command=self.select_packet_cache)
-        self.cached_data_button.grid(row=decoding_row+4, column=3, sticky='ew')  
-        self.packet_inspector_button = tk.Button(self.root, text="Packet Inspector", command = self.call_packet_inspector)
-        self.packet_inspector_button.grid(row=decoding_row+4, column=4, sticky='ew')  
         self.reset_button = tk.Button(self.root, text="Clear All Data", command=self.clear_data)
-        self.reset_button.grid(row=decoding_row+1, column=4, sticky='ew')
+        self.reset_button.grid(row=decoding_row-1, column=4, sticky='ew')
+        
+        self.decode_button = tk.Button(self.root, text="Read Telemetry Files", command=self.process_packets)
+        self.decode_button.grid(row=decoding_row +2, column=0, sticky='ew')
+        self.load_prev_button = tk.Button(self.root, text="Load from Pickle File", command=self.load_previous_packets)
+        self.load_prev_button.grid(row=decoding_row+1, column=4, sticky='ew')  
+
+        self.packet_inspector_button = tk.Button(self.root, text="Packet Inspector", command = self.call_packet_inspector)
+        self.packet_inspector_button.grid(row=decoding_row-1, column=3, sticky='ew')  
         self.pickle_button = tk.Button(self.root, text="Save Packets", command=self.save_packets)
-        self.pickle_button.grid(row=decoding_row+5, column=4, sticky='ew')
+        self.pickle_button.grid(row=decoding_row+2, column=4, sticky='ew')
 
         # checkboxes
         self.tlm_chk = tk.Checkbutton(self.root, text='load TLM files', variable=self.do_tlm)
-        self.tlm_chk.grid(row=decoding_row+5, column=0, sticky='w')
+        self.tlm_chk.grid(row=decoding_row+2, column=1, sticky='w')
         self.tlm_chk.var = self.do_tlm
         self.csv_chk = tk.Checkbutton(self.root, text='load CSV files', variable=self.do_csv)
-        self.csv_chk.grid(row=decoding_row+5, column=1, sticky='w')
+        self.csv_chk.grid(row=decoding_row+2, column=2, sticky='w')
         self.csv_chk.var = self.do_csv
-        self.prev_chk = tk.Checkbutton(self.root, text='load previously-cached packets', variable=self.do_previous)
-        self.prev_chk.grid(row=decoding_row+5, column=2, sticky='w')
-        self.prev_chk.var = self.do_previous
-        self.move_chk = tk.Checkbutton(self.root, text='Move processed files', variable=self.move_completed)
-        self.move_chk.grid(row=decoding_row+5, column=3, sticky='w')
+
+        # horizontal line
+        self.sep1 = ttk.Separator(self.root, orient="horizontal")
+        self.sep1.grid(row=decoding_row+3, column=0, columnspan=6, sticky='ew')
+
+        self.select_db_button = tk.Button(self.root, text="Select Packet Database", command=self.select_packet_db)
+        self.select_db_button.grid(row=decoding_row+4, column=4, sticky='ew')
+        tk.Label(self.root, text="Packet Database:",).grid(row=decoding_row + 4, column=1, sticky='e')
+        self.packet_db_text = tk.Label(self.root, textvariable = self.packet_db, borderwidth=2)
+        self.packet_db_text.grid(row=decoding_row+4, column=2, columnspan = 2, sticky='ew')
+
+
+        self.sec1b_text = tk.StringVar()
+        self.sec1b_text.set("Load packets from database:")
+        self.sec1b_label = tk.Label(self.root, textvariable=self.sec1b_text,  font=('Helvetica', 14, 'bold'))
+        self.sec1b_label.grid(row=decoding_row + 4, column=0, columnspan=ncols-1, sticky='w')
+
+
+        tk.Label(self.root, text="Start Time:").grid(row=decoding_row + 5, column=0, sticky='e')
+        tk.Label(self.root, text="Stop Time:").grid(row=decoding_row + 5, column=2, sticky='e')
+
+        self.p1_entry = tk.Entry(self.root)
+        self.p1_entry.grid(row = decoding_row + 5, column=1, sticky='ew')
+        self.p1_entry.insert(0,'YYYY-MM-DDTHH:MM:SS')
+        # self.p1_entry.insert(0,'2020-05-01')
+
+        self.p2_entry = tk.Entry(self.root)
+        self.p2_entry.grid(row = decoding_row + 5, column=3, sticky='ew')
+        self.p2_entry.insert(0,'YYYY-MM-DDTHH:MM:SS')
+        # self.p2_entry.insert(0,'2020-05-02')
+
+        self.load_from_db_button = tk.Button(self.root, text="Load from database", command=self.load_from_db)
+        self.load_from_db_button.grid(row=decoding_row + 5, column=4, sticky='ew')
+
+
         
         # horizontal line
         self.sep2 = ttk.Separator(self.root, orient="horizontal")
-        self.sep2.grid(row=decoding_row+6, column=0, columnspan=6, sticky='ew')
+        self.sep2.grid(row=decoding_row+7, column=0, columnspan=6, sticky='ew')
 
         # ----------- Process burst and survey data from decoded packets ----------
         tk.Label(self.root, text="Reassemble Data Products from Packets:",  font=('Helvetica', 14, 'bold')).grid(row=process_row, column=0, columnspan=2, sticky='w')
@@ -321,7 +213,6 @@ class GUI(tk.Frame):
 
         self.bm_menu = tk.OptionMenu(self.root, self.burst_mode, *self.burst_choices)
         self.bm_menu.grid(row=process_row+1, column=1, sticky='w')
-        # self.burst_mode.trace('w',self.burst_menu_changed)
 
         self.burst_chk = tk.Checkbutton(self.root, text='Process Burst Data', variable=self.do_burst)
         self.burst_chk.grid(row=process_row+1, column=2, sticky='w')
@@ -356,13 +247,12 @@ class GUI(tk.Frame):
         self.repeats_entry.grid(row = process_row +3, column=3, sticky='ew')
         self.repeats_entry.insert(0,'1')
 
-        # self.update_counters();
 
         # ----------- Status messages -------
         tk.Label(self.root, text="Status Messages:",  font=('Helvetica', 12)).grid(row=save_row+1, column=0, columnspan=2, sticky='ew')
 
-        self.statbox = tk.Listbox(self.root, height=4, width=30)
-        self.statbox.grid(row = save_row + 2, column = 0, columnspan = 2, rowspan=4, sticky='n')
+        self.statbox = tk.Listbox(self.root, height=6, width=30)
+        self.statbox.grid(row = save_row + 2, column = 0, columnspan = 2, rowspan=6, sticky='n')
         self.statbox.bind('<<ListboxSelect>>', self.select_stat)
 
         # ----------- Save data ----------
@@ -392,16 +282,25 @@ class GUI(tk.Frame):
         tk.Label(self.root, text="Output file format:").grid(row=save_row +2, column=2, sticky='w')
         self.ff_menu = tk.OptionMenu(self.root, self.file_format, *(self.available_formats), command=self.update_outfiles)
         self.ff_menu.grid(row=save_row+3, column=2, sticky='w')
-        ttk.Separator(self.root, orient="vertical").grid(row=save_row+1, column=2, rowspan=4, sticky='nsw')
 
-        
+        tk.Label(self.root, text="Header start time:", font=('Helvetica', 12, 'bold')).grid(row=save_row + 5, column=3, sticky='e')
+        self.save_t1_entry = tk.Entry(self.root)
+        self.save_t1_entry.grid(row = save_row +5, column=4, sticky='ew')
+        self.save_t1_entry.insert(0,'YYYY-MM-DDTHH:MM:SS')
+
+        tk.Label(self.root, text="Header stop time:", font=('Helvetica', 12, 'bold')).grid(row=save_row + 6, column=3, sticky='e')
+        self.save_t2_entry = tk.Entry(self.root)
+        self.save_t2_entry.grid(row = save_row +6, column=4, sticky='ew')
+        self.save_t2_entry.insert(0,'YYYY-MM-DDTHH:MM:SS')
+
+        ttk.Separator(self.root, orient="vertical").grid(row=save_row+1, column=2, rowspan=6, sticky='nsw')
 
         # ----------- Plot survey data ----------
         ttk.Separator(self.root, orient="horizontal").grid(row=plot_row, column=0, columnspan=ncols, sticky='ew')
         tk.Label(self.root, text="Plot Survey Data:",  font=('Helvetica', 14, 'bold')).grid(row=plot_row+1, column=0, columnspan=1, sticky='w')
 
-        self.load_survey_xml_button = tk.Button(self.root, text="Load survey XML data", command=self.load_survey_XML_file)
-        self.load_survey_xml_button.grid(row=plot_row+1, column=1)
+        self.load_survey_button = tk.Button(self.root, text="Load survey data", command=self.load_survey_file)
+        self.load_survey_button.grid(row=plot_row+8, column=4, sticky='ew')
 
         tk.Label(self.root, text="E channel gain:", font=('Helvetica', 12)).grid(row=plot_row + 2, column=0,rowspan=2, sticky='e')
         tk.Label(self.root, text="B channel gain:", font=('Helvetica', 12)).grid(row=plot_row + 4, column=0,rowspan=2, sticky='e')
@@ -449,9 +348,8 @@ class GUI(tk.Frame):
             k.var = self.line_plot_enables[ind]
 
 
-
-        tk.Label(self.root, text="Survey Start Time:").grid(row=plot_row + 8, column=0, sticky='e')
-        tk.Label(self.root, text="Survey Stop Time:").grid(row=plot_row + 8, column=2, sticky='e')
+        tk.Label(self.root, text="Survey Start Time:", font=('Helvetica', 12, 'bold')).grid(row=plot_row + 8, column=0, sticky='e')
+        tk.Label(self.root, text="Survey Stop Time:",  font=('Helvetica', 12, 'bold')).grid(row=plot_row + 8, column=2, sticky='e')
 
         self.s1_entry = tk.Entry(self.root)
         self.s1_entry.grid(row = plot_row + 8, column=1, sticky='ew')
@@ -466,16 +364,16 @@ class GUI(tk.Frame):
         ttk.Separator(self.root, orient="horizontal").grid(row=plot_row + 9, column=0, columnspan=ncols, sticky='ew')
         tk.Label(self.root, text="Plot Burst Data:",  font=('Helvetica', 14, 'bold')).grid(row=plot_row+11, column=0, columnspan=1, sticky='w')
              
-        self.load_burst_xml_button = tk.Button(self.root, text="Load burst XML data", command=self.load_burst_XML_file)
-        self.load_burst_xml_button.grid(row=plot_row+12, column=4, sticky='ewn')
+        self.load_burst_xml_button = tk.Button(self.root, text="Load burst data", command=self.load_burst_file)
+        self.load_burst_xml_button.grid(row=plot_row+11, column=4, sticky='ewn')
 
-        self.load_calibration_button = tk.Button(self.root, text="Load calibration data", command=self.load_calibration)
-        self.load_calibration_button.grid(row=plot_row+13, column=4, sticky='ewn')
+        self.plot_burst_button = tk.Button(self.root, text="Plot burst data", command=self.call_plot_burst)
+        self.plot_burst_button.grid(row=plot_row+12, column=4, sticky='ewn')
 
         self.plot_burst_map_button = tk.Button(self.root, text = "Plot burst map", command=self.call_burst_map)
-        self.plot_burst_map_button.grid(row=plot_row+14, column=4, sticky='ewn')
+        self.plot_burst_map_button.grid(row=plot_row+13, column=4, sticky='ewn')
 
-        self.burst_checkboxes = ['plot terminator','plot trajectory','show transmitters']
+        self.burst_checkboxes = ['plot terminator','plot trajectory','show transmitters','print GPS entries']
 
         self.burst_check_vars = dict()
         for x in self.burst_checkboxes:
@@ -492,11 +390,10 @@ class GUI(tk.Frame):
             k.grid(row=plot_row + 13, column=ind, sticky='w')
          
         tk.Label(self.root, text="Available bursts:",  font=('Helvetica', 12)).grid(row=plot_row+11, column=2, sticky='ew')
-        self.plot_burst_button = tk.Button(self.root, text="Plot Burst Data", command=self.call_plot_burst)
-        self.plot_burst_button.grid(row=plot_row+11, column=4, sticky='ewn')
 
-        self.listbox = tk.Listbox(self.root, height=3, width=30, selectmode = tk.EXTENDED)
-        self.listbox.grid(row = plot_row + 12, column = 2, columnspan=2, rowspan=3)
+
+        self.listbox = tk.Listbox(self.root, height=6, width=30, selectmode = tk.EXTENDED)
+        self.listbox.grid(row = plot_row + 12, column = 2, columnspan=2, rowspan=6)
 
         # Run some updaters. eh, this should be done in a callback, but... shrug
         self.update_burst_list()
@@ -504,6 +401,31 @@ class GUI(tk.Frame):
 
 
     # ----------------------- Actions ---------------------------
+
+    def load_from_db(self):
+
+        try:
+            p1 = dateutil.parser.parse(self.p1_entry.get()).replace(tzinfo=datetime.timezone.utc)
+            p2 = dateutil.parser.parse(self.p2_entry.get()).replace(tzinfo=datetime.timezone.utc)
+        except:
+            logging.warning("couldn't parse packet start and end times")
+            p1 = None
+            p2 = None
+            return False
+
+        logging.info(f"Loading packets with header timestamps between {p1} and {p2}")
+
+        database = self.packet_db.get()
+        if not os.path.exists(database):
+            logging.warning(f'could not find database: {database}')
+            return False
+
+        self.packets.extend(get_packets_within_range(database, t1=p1, t2=p2))
+        self.update_counters()
+
+
+        return True
+
     def load_calibration(self):
         logging.info('Selecting calibration file')
         self.cal_file = filedialog.askopenfilename(initialdir=os.getcwd())
@@ -525,72 +447,117 @@ class GUI(tk.Frame):
 
     def save_packets(self):
         ''' Save decoded (but unassembled) packets to a Pickle file '''
-
+        logging.info('Please select an output directory')
+        self.out_dir.set(filedialog.askdirectory(initialdir=self.in_dir.get()))
         fname = os.path.join(self.out_dir.get(), 'packets.pkl')
         logging.info(f'Saving decoded packets to {fname}')
         with open(fname,'wb') as file:
             pickle.dump(self.packets, file)
         return
 
-    def save_survey(self):
+    def save_survey(self, update_dir=True):
+
         if self.survey_products:
+            if update_dir:
+                self.out_dir.set(filedialog.askdirectory(initialdir=self.out_dir.get()))
+
             outpath = os.path.join(self.out_dir.get(), self.survey_entry.get())
+            try:
+                t1 = dateutil.parser.parse(self.save_t1_entry.get()).replace(tzinfo=datetime.timezone.utc)
+                t2 = dateutil.parser.parse(self.save_t2_entry.get()).replace(tzinfo=datetime.timezone.utc)
+                outdata = list(filter(lambda p: (p['header_timestamp'] >= t1.timestamp()) and (p['header_timestamp'] <= t2.timestamp()), self.survey_products))
+                logging.info(f'saving survey products between {t1} and {t2}')
+            except:
+                t1 = None
+                t2 = None
+                outdata = self.survey_products
 
             if self.file_format.get() in 'XML':
-                logging.info(f'saving {len(self.survey_products)} survey products to {outpath}')
-                write_survey_XML(self.survey_products,outpath)
+                logging.info(f'saving {len(outdata)} survey products to {outpath}')
+                write_survey_XML(outdata,outpath)
             
             elif self.file_format.get() in 'Matlab':
-                logging.info(f'saving {len(self.survey_products)} survey products to {outpath}')
-                savemat(outpath, {'survey_data' : self.survey_products})
+                logging.info(f'saving {len(outdata)} survey products to {outpath}')
+                savemat(outpath, {'survey_data' : outdata})
             
             elif self.file_format.get() in 'Pickle':
-                logging.info(f'saving {len(self.survey_products)} survey products to {outpath}')
+                logging.info(f'saving {len(outdata)} survey products to {outpath}')
                 with open(outpath,'wb') as file:
-                    pickle.dump(self.survey_products, file)
+                    pickle.dump(outdata, file)
             else:
                 logging.info(f'{self.file_format.get()} not yet implemented - go bug Austin about it')
         else:
             logging.info('No survey data to save')
         return
-    def save_burst(self):
+
+
+    def save_burst(self, update_dir=True):
+
         if self.burst_products:
+            if update_dir:
+                self.out_dir.set(filedialog.askdirectory(initialdir=self.out_dir.get()))
+
             outpath = os.path.join(self.out_dir.get(), self.burst_entry.get())
 
+            try:
+                t1 = dateutil.parser.parse(self.save_t1_entry.get()).replace(tzinfo=datetime.timezone.utc)
+                t2 = dateutil.parser.parse(self.save_t2_entry.get()).replace(tzinfo=datetime.timezone.utc)
+                outdata = list(filter(lambda p: (p['header_timestamp'] >= t1.timestamp()) and (p['header_timestamp'] <= t2.timestamp()), self.burst_products))
+                logging.info(f'saving burst products between {t1} and {t2}')
+            except:
+                t1 = None
+                t2 = None
+                outdata = self.burst_products
+
+
             if self.file_format.get() in 'XML':
-                logging.info(f'saving {len(self.burst_products)} burst products to {outpath}')
-                write_burst_XML(self.burst_products, outpath)
+                logging.info(f'saving {len(outdata)} burst products to {outpath}')
+                write_burst_XML(outdata, outpath)
 
             elif self.file_format.get() in 'Matlab':
-                logging.info(f'saving {len(self.burst_products)} burst products to {outpath}')
-                savemat(outpath, {'burst_data' : self.burst_products})
+                logging.info(f'saving {len(outdata)} burst products to {outpath}')
+                savemat(outpath, {'burst_data' : outdata})
 
             elif self.file_format.get() in 'Pickle':
-                logging.info(f'saving {len(self.burst_products)} burst products to {outpath}')
+                logging.info(f'saving {len(outdata)} burst products to {outpath}')
                 with open(outpath, 'wb') as file:
-                    pickle.dump(self.burst_products, file)
+                    pickle.dump(outdata, file)
             else:
                 logging.info(f'{self.file_format.get()} not yet implemented - go bug Austin about it')
         else:
             logging.info('NO burst data to save')    
         return
 
-    def save_stats(self):
+    def save_stats(self, update_dir=True):
         if self.status_messages:
+            if update_dir:
+                self.out_dir.set(filedialog.askdirectory(initialdir=self.out_dir.get()))
+
             outpath = os.path.join(self.out_dir.get(), self.status_entry.get())
+         
+            try:
+                t1 = dateutil.parser.parse(self.save_t1_entry.get()).replace(tzinfo=datetime.timezone.utc)
+                t2 = dateutil.parser.parse(self.save_t2_entry.get()).replace(tzinfo=datetime.timezone.utc)
+                outdata = list(filter(lambda p: (p['header_timestamp'] >= t1.timestamp()) and (p['header_timestamp'] <= t2.timestamp()), self.status_messages))
+                logging.info(f'saving status messages between {t1} and {t2}')
+            except:
+                t1 = None
+                t2 = None
+                outdata = self.status_messages
+
 
             if self.file_format.get() in 'XML':
-                logging.info(f'saving {len(self.status_messages)} status messages to {outpath}')
-                write_status_XML(self.status_messages, outpath)
+                logging.info(f'saving {len(outdata)} status messages to {outpath}')
+                write_status_XML(outdata, outpath)
 
             elif self.file_format.get() in 'Matlab':
-                logging.info(f'saving {len(self.status_messages)} status messages to {outpath}')
-                savemat(outpath, {'status_messages' : self.status_messages})
+                logging.info(f'saving {len(outdata)} status messages to {outpath}')
+                savemat(outpath, {'status_messages' : outdata})
 
             elif self.file_format.get() in 'Pickle':
-                logging.info(f'saving {len(self.status_messages)} status messages to {outpath}')
+                logging.info(f'saving {len(outdata)} status messages to {outpath}')
                 with open(outpath,'wb') as file:
-                    pickle.dump(self.status_messages, file)
+                    pickle.dump(outdata, file)
 
             else:
                 logging.info(f'{self.file_format.get()} not yet implemented - go bug Austin about it')
@@ -600,9 +567,11 @@ class GUI(tk.Frame):
 
     def save_all(self):
         logging.info(f'Saving all decoded data products')
-        self.save_survey()
-        self.save_burst()
-        self.save_stats()
+        logging.info(f'Please select an output directory')
+        self.out_dir.set(filedialog.askdirectory(initialdir=self.out_dir.get()))
+        self.save_survey(update_dir=False)
+        self.save_burst( update_dir=False)
+        self.save_stats( update_dir=False)
         return True
 
     def update_burst_list(self):
@@ -611,7 +580,7 @@ class GUI(tk.Frame):
         for b in self.burst_products:
             datestr = datetime.datetime.fromtimestamp(b['header_timestamp'], tz=datetime.timezone.utc)
 
-            namestr = datestr.strftime('%m/%d/%Y') + ': '
+            namestr = datestr.strftime('%m/%d/%Y %H:%M') + ': '
             if b['config']['TD_FD_SELECT']:
                 namestr+='Time Domain, '
             else:
@@ -681,23 +650,39 @@ class GUI(tk.Frame):
         # updates whenever we need to)
         # self.root.after(100, self.update_counters) 
 
-    def load_survey_XML_file(self):
+    def load_survey_file(self):
         logger = logging.getLogger(__name__)
         fname=filedialog.askopenfilename(initialdir=self.in_dir.get())
 
         if fname and fname.endswith(".xml"):
             self.survey_products.extend(read_survey_XML(fname))
 
-            logger.info(f'Loaded {len(self.survey_products)} survey entries from {fname}')
-            self.update_counters()
-            self.update_survey_time_fields()            
+        if fname and fname.endswith(".mat"):
+            self.survey_products.extend(read_survey_matlab(fname))
 
-    def load_burst_XML_file(self):
+        if fname and fname.endswith(".pkl"):
+            with open(fname,'rb') as file:
+                self.survey_products.extend(pickle.load(file))
+
+        logger.info(f'Loaded {len(self.survey_products)} survey entries from {fname}')
+        self.update_counters()
+        self.update_survey_time_fields()            
+
+    def load_burst_file(self):
         logger = logging.getLogger(__name__)
         fname=filedialog.askopenfilename(initialdir=self.in_dir.get())
 
-        if fname and fname.endswith(".xml"):
-            self.burst_products.extend(read_burst_XML(fname))
+        if fname:
+            if fname.endswith(".xml"):
+                self.burst_products.extend(read_burst_XML(fname))
+
+            if fname.endswith(".mat"):
+
+                self.burst_products.extend(read_burst_matlab(fname))
+
+            if fname.endswith(".pkl"):
+                with open(fname,'rb') as file:
+                    self.burst_products.extend(pickle.load(file))
 
             logger.info(f'Loaded {len(self.burst_products)} burst entries from {fname}')
             self.update_counters()
@@ -722,13 +707,10 @@ class GUI(tk.Frame):
             self.packet_len_text.set(f"{len(self.packets)} packets loaded")
         
         return
-    def select_in_directory(self):
-        self.in_dir.set(filedialog.askdirectory(initialdir=self.in_dir.get()))
-        return True
-    def select_packet_cache(self):
-        self.in_progress_file.set(filedialog.askopenfilename(initialdir=os.getcwd()))
-        return True
 
+    def select_packet_db(self):
+        self.packet_db.set(filedialog.askopenfilename(initialdir=self.in_dir.get()))
+        
     def call_packet_inspector(self):
         if not self.packets:
             logging.info(f'No packets to inspect')
@@ -741,7 +723,6 @@ class GUI(tk.Frame):
             logging.info(f'No survey data present')
             return
         
-        # if self.do_metadata.get():
         # Get selected metadata plots:
         lines_to_do = [self.line_plot_fields[x] for x in range(len(self.line_plot_fields))
                  if self.line_plot_enables[x].get()]
@@ -756,20 +737,12 @@ class GUI(tk.Frame):
             s2 = None
             
         plot_survey_data_and_metadata(self.root, self.survey_products,
-            lines_to_do, cal_file=None, 
+            line_plots=lines_to_do, cal_file=None, 
             plot_map = self.plot_map.get(),
             E_gain=self.survey_E_gain.get(),
             B_gain=self.survey_B_gain.get(), 
             bus_timestamps=self.survey_time_axis.get(),
             t1 = s1, t2 = s2)
-        # else:
-        #     # Just plot E and B, no metadata
-        #     # (This is a separate function to keep the figure sizing
-        #     # and axes positioning cleaner)
-        #     plot_survey_data(self.root, self.survey_products, 
-        #         cal_file = self.cal_file, E_gain = self.survey_E_gain.get(),
-        #         B_gain = self.survey_B_gain.get(),
-        #         bus_timestamps=self.survey_time_axis.get())
 
     def call_plot_burst(self):
         if not self.burst_products:
@@ -797,19 +770,14 @@ class GUI(tk.Frame):
                 plot_burst_map(self.root, cur_burst['G'],
                 show_terminator   = self.burst_check_vars['plot terminator'].get(),
                 plot_trajectory   = self.burst_check_vars['plot trajectory'].get(),
-                show_transmitters = self.burst_check_vars['show transmitters'].get())
-
- 
-    def select_out_directory(self):
-        logging.info("you pushed the button!") 
-        self.out_dir.set(filedialog.askdirectory(initialdir=self.out_dir.get()))
-
-        return True
+                show_transmitters = self.burst_check_vars['show transmitters'].get(),
+                print_GPS_entries = self.burst_check_vars['print GPS entries'].get())
 
     def get_burst_command(self):
         ''' Parse and validate the command entered in the text box '''
         logger=logging.getLogger(__name__)
-        inp_str = self.cmd_entry.get()
+        inp_str = self.cmd_entry.get().strip(' []{}\t')
+
         logger.info(f'inp_str: {inp_str}')
         if inp_str.startswith('0x'):
             # Hex string
@@ -822,8 +790,10 @@ class GUI(tk.Frame):
         else:
             # 3 ints:
             logger.info('ints')
-            cmd = np.fromstring(inp_str, dtype=int, sep=' ')
-
+            if ',' in inp_str:
+                cmd = np.fromstring(inp_str, dtype=int, sep=',')
+            else:
+                cmd = np.fromstring(inp_str, dtype=int, sep=' ')
         logger.info(f'cmd: {cmd}')
         return cmd
 
@@ -876,30 +846,19 @@ class GUI(tk.Frame):
                                            burst_cmd = burst_cmd, burst_pulses = n_pulses)
                 #     outs['burst'] = B_data
                     self.burst_products.extend(B_data)
+
+                elif self.burst_mode.get() in 'Group by Trailing Status Packet':
+
+                    logger.info(f'Processing bursts by trailing status packets')
+                    B_data, unused_burst = decode_burst_data_by_trailing_status_packet(self.packets)
+                    self.burst_products.extend(B_data)
+
+
             # Process any survey data
             if self.do_survey.get():
                 logger.info("Decoding survey data")
                 S_data, unused_survey = decode_survey_data(self.packets)
                 self.survey_products = S_data
-
-
-            # # Delete previous unused packet file -- they've either
-            # # been processed by this point, or are in the new unused list
-            # if args.do_previous:
-            #     if os.path.exists(in_progress_file):
-            #         os.remove(in_progress_file)
-
-            #     # Store any unused survey packets
-            #     unused = []
-            #     if args.do_survey:
-            #         unused += unused_survey
-            #     if args.do_burst:
-            #         unused += unused_burst
-            #     # unused = unused_survey + unused_burst
-            #     if unused:
-            #         logging.info(f"Storing {len(unused)} unused packets")
-            #         with open(in_progress_file,'wb') as f:
-            #             pickle.dump(unused, f)
 
         else:
             logger.info('No packets loaded!')
@@ -913,7 +872,11 @@ class GUI(tk.Frame):
     def process_packets(self):
         logger = logging.getLogger()
 
+        
         logger.info("Processing telemetry packets...") 
+        logger.info("Please select an input directory")
+        self.in_dir.set(filedialog.askdirectory(initialdir=self.in_dir.get()))
+
         d = os.listdir(self.in_dir.get())
 
         tlm_files = [x for x in d if x.endswith('.tlm')]
@@ -942,15 +905,6 @@ class GUI(tk.Frame):
                 if self.move_completed.get():
                     shutil.move(fpath, os.path.join(self.out_dir.get(),fname))
 
-        # Load any previously-unused packets, and add them to the list
-        if self.do_previous.get():
-            if os.path.exists(self.in_progress_file):
-                logger.info("loading previous unused data")
-                with open(self.in_progress_file,'rb') as f:
-                    packets_in_progress = pickle.load(f) 
-                    logger.info(f'loaded {len(packets_in_progress)} in-progress packets')
-                    packets.extend(packets_in_progress)
-
         self.packets = packets
     
         self.update_counters()        
@@ -966,47 +920,11 @@ class GUI(tk.Frame):
         self.help_msg = tk.Message(self.help_window, anchor='center', text=helpstr, width=80)
         self.help_msg.pack()
 
-    # def show_status_messages_window(self):
-    #     self.stat_window = tk.Toplevel(self.root)
-
-    #     tk.Label(self.stat_window, text="Status Messages:",  font=('Helvetica', 12)).pack() #grid(row=0, column=0, sticky='ew')
-
-    #     self.statbox = tk.Listbox(self.stat_window, height=3, width=30, selectmode = tk.EXTENDED)
-    #     self.statbox.pack()
-    #     self.stat_label = tk.Text(self.stat_window, width=80, height=40, highlightthickness=1, highlightbackground='grey')
-    #     self.stat_label.pack()
-
-
-    #     self.stat_label.config(state=tk.NORMAL)
-    #     self.stat_label.delete(1.0, tk.END)
-    #     self.stat_label.insert(tk.END, "hey fucker")
-    #     self.stat_label.config(state=tk.DISABLED)
-
-    #     for stat in self.status_messages:
-    #         datestr = datetime.datetime.fromtimestamp(stat['header_timestamp'], tz=datetime.timezone.utc)
-    #         namestr = 'source: ' + stat['source'] + ', ' + datestr.strftime('%m/%d/%Y %H:%M:%S')
-    #         self.statbox.insert(tk.END, namestr)
-
-    #         self.statbox.bind('<<ListboxSelect>>', self.select_stat)
-
+ 
     def select_stat(self, *args):
         stat_ind = int(self.statbox.curselection()[0])
-        stat_str = print_status([self.status_messages[stat_ind]])
-        
-        # self.stat_window = tk.Toplevel(self.root)
-
-
-        # self.stat_label = tk.Text(self.stat_window, width=80, height=40, highlightthickness=1, highlightbackground='grey')
-        # self.stat_label.pack()
-
-        # self.stat_label.config(state=tk.NORMAL)
-        # self.stat_label.delete(1.0, tk.END)
-        # self.stat_label.insert(tk.END, f'{stat_str}')
-        # self.stat_label.config(state=tk.DISABLED)
+        stat_str = print_status([self.status_messages[stat_ind]])       
         logging.info(stat_str)
-
-
-
 
 
 def main():

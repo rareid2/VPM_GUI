@@ -5,7 +5,9 @@ import numpy as np
 import datetime
 import os
 import logging
-
+import gzip
+import pickle
+import scipy.io as spio
 
 def write_status_XML(in_data, filename="status_messages.xml"):
     '''write status messages to an xml file'''
@@ -121,6 +123,9 @@ def write_burst_XML(in_data, filename='burst_data.xml'):
         entry = ET.SubElement(d, 'burst')
         entry.set('header_timestamp',datetime.datetime.utcfromtimestamp(entry_data['header_timestamp']).isoformat())
         
+        if 'footer_timestamp' in entry_data:
+            entry.set('footer_timestamp', datetime.datetime.utcfromtimestamp(entry_data['footer_timestamp']).isoformat())
+
         if 'experiment_number' in entry_data:
             entry.set('experiment_number', f"{entry_data['experiment_number']}")
             
@@ -161,7 +166,9 @@ def write_burst_XML(in_data, filename='burst_data.xml'):
         #                 cur_item.text = str(vv)
         #         else:                
         #             cur_item = ET.SubElement(stat_el,k)
-        #             cur_item.text = str(v)        
+        #             cur_item.text = str(v)
+
+
 
         # E and B data fields        
         if entry_data['config']['TD_FD_SELECT']==1:
@@ -224,6 +231,13 @@ def read_burst_XML(filename):
         header_timestamp_isoformat = S.attrib['header_timestamp']
         d['header_timestamp'] = datetime.datetime.fromisoformat(header_timestamp_isoformat).replace(tzinfo=datetime.timezone.utc).timestamp()
         
+        if 'footer_timestamp' in S.attrib:
+            footer_timestamp_isoformat = S.attrib['footer_timestamp']
+            d['footer_timestamp'] = datetime.datetime.fromisoformat(footer_timestamp_isoformat).replace(tzinfo=datetime.timezone.utc).timestamp()    
+
+        if 'experiment_number' in S.attrib:
+            d['experiment_number'] = int(S.attrib['experiment_number'])     
+
         # Load burst configuration
         d['config'] = dict()
         for el in S.find('burst_config'):
@@ -328,6 +342,113 @@ def read_XML(filename, field):
 def read_status_XML(filename):
     ''' A convenience wrapper '''
     return read_XML(filename, 'status')
+
+
+def load_packets_from_tree(raw_root):
+    ''' walk through a file tree, and load any .pkl or .pklz files we can find.
+        These should contain "packet" entries only; we're not checking against that.
+    '''
+
+    logger = logging.getLogger(__name__ + '.load_packets_from_tree')
+
+    packets = []
+    # ----------------------------- Load data  -----------------------------
+    for root, dirs, files in os.walk(raw_root):
+        for fname in files:
+            try:
+                    # Zipped pickle files:
+                if fname.endswith('.pklz'):
+                    print(f'loading zipped packets from {root} {fname}')
+                    with gzip.open(os.path.join(root, fname),'rb') as file:
+                        packets.extend(pickle.load(file))
+
+                # regular pickle files:
+                if fname.endswith('.pkl'):
+                    print(f'loading packets from {root} {fname}')
+                    with open(os.path.join(root, fname),'rb') as file:
+                        packets.extend(pickle.load(file))
+            except:
+                print(f'Problem with {fname}')
+
+    return packets
+
+
+def loadmat(filename, var_names = None):
+    '''
+    this function should be called instead of direct spio.loadmat
+    as it cures the problem of not properly recovering python dictionaries
+    from mat files. It calls the function check keys to cure all entries
+    which are still mat-objects
+    '''
+    def _check_keys(d):
+        '''
+        checks if entries in dictionary are mat-objects. If yes
+        todict is called to change them to nested dictionaries
+        '''
+        for key in d:
+            if isinstance(d[key], spio.matlab.mio5_params.mat_struct):
+                d[key] = _todict(d[key])
+            if isinstance(d[key], np.ndarray):
+                d[key] = _tolist(d[key])
+        return d
+
+    def _todict(matobj):
+        '''
+        A recursive function which constructs from matobjects nested dictionaries
+        '''
+        d = {}
+        for strg in matobj._fieldnames:
+            elem = matobj.__dict__[strg]
+            if isinstance(elem, spio.matlab.mio5_params.mat_struct):
+                d[strg] = _todict(elem)
+            elif isinstance(elem, np.ndarray):
+                d[strg] = _tolist(elem)
+            else:
+                d[strg] = elem
+        return d
+
+    def _tolist(ndarray):
+        '''
+        A recursive function which constructs lists from cellarrays
+        (which are loaded as numpy ndarrays), recursing into the elements
+        if they contain matobjects.
+        '''
+        elem_list = []
+        for sub_elem in ndarray:
+            if isinstance(sub_elem, spio.matlab.mio5_params.mat_struct):
+                elem_list.append(_todict(sub_elem))
+            elif isinstance(sub_elem, np.ndarray):
+                elem_list.append(_tolist(sub_elem))
+            else:
+                elem_list.append(sub_elem)
+        return elem_list
+    
+    data = spio.loadmat(filename, struct_as_record=False, squeeze_me=True)
+    return _check_keys(data)
+
+def read_survey_matlab(filename):
+    sd = loadmat(filename)
+    if 'survey_data' in sd:
+        sd = sd['survey_data']
+        for x in sd:
+            if 'GPS' in x:
+                x['GPS'] = [x['GPS']]
+            x['E_data'] = np.array(x['E_data'], dtype='uint8')
+            x['B_data'] = np.array(x['B_data'], dtype='uint8')
+        return sd
+    else:
+        return []
+
+def read_burst_matlab(filename):
+    bd = loadmat(filename)
+    
+    if 'burst_data' in bd:
+        bd = bd['burst_data']
+        bd['E'] = np.array(bd['E'])
+        bd['B'] = np.array(bd['B'])
+        return [bd]
+    else:
+        return []
     
 if __name__ == '__main__':
 

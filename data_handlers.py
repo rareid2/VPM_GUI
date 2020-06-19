@@ -853,6 +853,97 @@ def decode_burst_data_between_status_packets(packets):
     logger.info(f"returning {len(unused_packets)} unused burst packets")    
     return completed_bursts, unused_packets
 
+
+
+def decode_burst_data_by_trailing_status_packet(packets):
+    ''' Decode burst data by sorting packets by arrival time, and binning bursts
+        within a time window preceeding a status packet
+    '''
+
+    logger = logging.getLogger(__name__)
+
+    I_packets     = list(filter(lambda p: (p['dtype'] == 'I' and chr(p['data'][3])=='B'), packets))
+    I_packets     = sorted(I_packets, key = lambda p: p['header_timestamp'])
+    burst_packets = list(filter(lambda packet: packet['dtype'] in ['E','B','G'], packets))
+    burst_packets = sorted(burst_packets, key = lambda p: p['header_timestamp'])
+    # stats = decode_status(I_packets)
+
+
+    avail_exp_nums = np.unique([x['exp_num'] for x in burst_packets])
+    logging.info(f"exp nums in dataset: {avail_exp_nums}")
+    completed_bursts = []
+
+    status_times = np.array(sorted([IP['header_timestamp'] for IP in I_packets]))
+
+    # We should have a status message at the beginning and end of each burst.
+    # Add 1 second padding on either side for good measure.
+    logger.info(f'I_packets has length {len(I_packets)} pre-sift')
+    for IB in I_packets:
+        ta = IB['header_timestamp'] - 2*3600
+        tb = IB['header_timestamp'] + 1.5
+        logger.info(f"{ta}, {tb}")
+        
+        # Confirm that the burst command is the same within each status packet:        
+        IB_cmd = np.flip(IB['data'][12:15])
+
+
+        # (At this point, there will be only one available experiment number)
+        for e_num in avail_exp_nums:
+            filt_inds = [p['header_timestamp'] >= ta and p['header_timestamp'] <= tb for p in burst_packets]
+            packets_in_time_range = list(itertools.compress(burst_packets, filt_inds))
+
+
+            packets_with_matching_e_num = list(filter(lambda p: p['exp_num']==e_num, burst_packets))
+            logger.info(f"packets in time range: {len(packets_in_time_range)}; packets with exp_num {e_num}: {len(packets_with_matching_e_num)}")
+
+            if len(packets_in_time_range) > 100:
+                logger.info(f'------ exp num {e_num} ------')
+                logger.info(f"status packet times: {datetime.datetime.fromtimestamp(ta),datetime.datetime.fromtimestamp(tb)}")
+
+
+                # Ok! Now we have a list of packets, all with a common experiment number, 
+                # in between two status packets, each with have the same burst command.
+                # Ideally, this should be a complete set of burst data. Let's try processing it!
+                
+                # The burst command is echoed at the top of each GPS packet; we're using the
+                # command listed in the status packet, but let's confirm it matches.
+                for gg in filter(lambda packet: packet['dtype'] == 'G', packets_in_time_range):
+                    if gg['start_ind'] ==0:
+                        cmd_gps = np.flip(gg['data'][0:3])
+                        logger.debug(cmd_gps)
+                        if (IB_cmd != cmd_gps).any():
+                            logger.warning("GPS and status command echo mismatch")
+
+                # Get burst configuration parameters:
+                burst_config = decode_burst_command(IB_cmd)
+                
+                # Get burst nPulses -- this is the one key parameter that isn't defined by the burst command...
+                system_config = np.flip(IB['data'][20:24])
+                system_config = ''.join("{0:8b}".format(a) for a in system_config).replace(' ','0')
+                burst_config['burst_pulses'] = int(system_config[16:24],base=2)
+
+                logger.info(burst_config)
+
+                processed = process_burst(packets_in_time_range, burst_config)
+                # processed['I'] = [IA, IB]
+                processed['status'] = decode_status([IB])
+                processed['bbr_config'] = decode_uBBR_command(processed['status'][0]['prev_bbr_command'])
+                processed['header_timestamp'] = ta
+                processed['experiment_number'] = e_num
+                
+                completed_bursts.append(processed)
+
+                
+                # Remove processed packets from data_dict
+                burst_packets = list(itertools.compress(burst_packets, np.logical_not(filt_inds)))
+                I_packets.remove(IB)
+
+            logger.info(f"{len(burst_packets)} packets remaining")
+
+    unused_packets = burst_packets + I_packets
+    logger.info(f"returning {len(unused_packets)} unused burst packets")    
+    return completed_bursts, unused_packets
+
 def process_burst(packets, burst_config=None):
     ''' Reassemble burst data, according to info in burst_config.
         This assumes the set of packets is complete, and belongs to the
