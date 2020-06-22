@@ -27,7 +27,7 @@ def decode_status(packets):
         Use "print_status(list)" to print a nice string
     '''
 
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__ +'.decode_status')
 
 
     out_data = []
@@ -38,9 +38,9 @@ def decode_status(packets):
             data = p['data'][:p['bytecount']]
 
             source = chr(data[3])
-            prev_command = np.flip(data[0:3])
-            prev_bbr_command = np.flip(data[4:7])
-            prev_burst_command = np.flip(data[12:15])
+            prev_command = np.array(np.flip(data[0:3]), dtype=np.uint8)
+            prev_bbr_command = np.array(np.flip(data[4:7]), dtype=np.uint8)
+            prev_burst_command = np.array(np.flip(data[12:15]), dtype=np.uint8)
             total_commands = data[16] + 256*data[17]
             
             system_config = np.flip(data[20:24])
@@ -230,7 +230,7 @@ def decode_burst_command(cmd):
                       bins along the frequency axis (nominally 512 bins, spanning 0 to 40 kHz).
                       A '1' enables data collection for this bin.
     '''
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__ +'.decode_burst_command')
 
 
     logger.debug(f'decoding command: {cmd}')
@@ -305,7 +305,7 @@ def generate_burst_command(burst_config):
 def decode_uBBR_command(cmd):
     '''decode commands sent to the uBBR (passed as 3 uint8s)'''
     
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__ +'.decode_uBBR_command')
 
     cmd_str = ''.join("{0:8b}".format(x) for x in cmd).replace(' ','0')[::-1]
     
@@ -365,7 +365,7 @@ def decode_packets_TLM(data_root, fname):
         verify:             received checksum - calculated checksum.
                             Should be all zeros unless we have some corruption happening.
     '''
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__ + '.decode_packets_TLM')
 
     logger.info(f'Loading file {fname}')
     fpath = os.path.join(data_root, fname)
@@ -443,7 +443,9 @@ def decode_packets_TLM(data_root, fname):
             datatype = chr(cur_packet[DATA_TYPE_INDEX]) # works!
             experiment_number = cur_packet[EXPERIMENT_INDEX]
             # print(experiment_number)
-            bytecount = 256*cur_packet[bytecount_index] + cur_packet[bytecount_index + 1]
+            # bytecount = 256*cur_packet[bytecount_index] + cur_packet[bytecount_index + 1]
+            bytecount = struct.unpack('>H', cur_packet[bytecount_index:(bytecount_index + 2)])[0]
+
             checksum = cur_packet[checksum_index]
 
             if (checksum - checksum_calc) != 0:
@@ -483,6 +485,9 @@ def decode_packets_CSV(data_root, filename):
     '''
     Author:     Austin Sousa
                 austin.sousa@colorado.edu
+    Version:    1.1
+        Date    6.12.2020
+        - Modified to detect delimiter and to be more robust against header row weirdness
     Version:    1.0
         Date:   2.25.2020
     Description:
@@ -490,24 +495,45 @@ def decode_packets_CSV(data_root, filename):
         (e.g., the KSat file format)
 
     '''
-    logger = logging.getLogger()
-    # logger = logging.getLogger("gui.decode_pa")
+    logger = logging.getLogger(__name__ + '.decode_packets_CSV')
 
     fpath = os.path.join(data_root, filename)
-    header_string = 'TARGET,PACKET,UTC_TIME,DYNAMIC_DATA,'  # In case the format changes...
+    
+    with open(fpath) as csvfile:
+        # cur = csvfile.read().split('\n')
+        cur = csvfile.readlines()
 
     # Find the header row
-    with open(fpath) as csvfile:
-            # Check if we have the header in the first row:
-            cur = csvfile.read().split('\n')
-            header_index = cur.index(header_string)
+    for header_index, line in enumerate(cur):
+        if 'TARGET' in line:
+            header_line = line
+            break
+    logger.debug(f'Header index: {header_index}')            
+
+    # Detect the delimeter -- either comma or tab so far
+    delimeters = [',',' ','\t']
+    for delimeter in delimeters:
+
+        counts = header_line.count(delimeter)
+        logger.debug(f'Delimter: " {delimeter}" counts: {counts}')
+
+        # header_string = str(header_line).split()
+        
+        if counts>3:
+            logger.info(f'using delimeter "{delimeter}"')
+            header_string = header_line.split(delimeter)
+            break
+    logger.debug(f'Header string: {header_string}')
 
     with open(fpath) as csvfile:
         # Skip up to the header row:
         for i in range(header_index):
             csvfile.readline()
-
-        reader = csv.DictReader(csvfile, delimiter=',')
+        
+        # Read the remaining entries into dicts
+        reader = csv.DictReader(csvfile, delimiter=delimeter)
+        
+        # Parse the entry list, grab data and timestamp
         timestamps = []
         raw_data = []
         for row in reader:
@@ -517,7 +543,7 @@ def decode_packets_CSV(data_root, filename):
                     raw_data.append(bytes.fromhex(row['DYNAMIC_DATA']))
             except:
                 logger.info(f'skipped CSV line: {row}')
-    
+
     # Packet indices and lengths (set in payload firmware)
     PACKET_SIZE = 512
     DATA_SEGMENT_LENGTH = PACKET_SIZE - 8
@@ -656,7 +682,7 @@ def decode_burst_data_by_experiment_number(packets, burst_cmd = None, burst_puls
         reset between two adjacent bursts, resulting in two bursts with experiment
         number 0.
     '''
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__+'.decode_burst_data_by_experiment_number')
 
     # Select burst packets
     burst_packets = list(filter(lambda packet: packet['dtype'] in ['E','B','G'], packets))
@@ -709,7 +735,7 @@ def decode_burst_data_in_range(packets, ta, tb, burst_cmd = None, burst_pulses =
     ''' decode burst data between a given time interval, with a given command.
         Use this in the event that we want to decode an incomplete burst.
     '''
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__ +'.decode_burst_data_in_range')
     burst_packets = list(filter(lambda packet: packet['dtype'] in ['E','B','G'], packets))
     burst_packets = sorted(burst_packets, key = lambda p: p['header_timestamp'])
     header_timestamps = ([p['header_timestamp'] for p in burst_packets])
@@ -763,7 +789,7 @@ def decode_burst_data_between_status_packets(packets):
         between two status packets. 
     '''
 
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__ +'.decode_burst_data_between_status_packets')
 
     I_packets     = list(filter(lambda p: (p['dtype'] == 'I' and chr(p['data'][3])=='B'), packets))
     I_packets     = sorted(I_packets, key = lambda p: p['header_timestamp'])
@@ -952,7 +978,7 @@ def process_burst(packets, burst_config=None):
         This is the internal helper function called by the other "Decode burst" methods.
     '''
 
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__ +'.process_burst')
 
     # Sort the packets by data stream:
     E_packets = list(filter(lambda packet: packet['dtype'] == 'E', packets))
@@ -1085,7 +1111,7 @@ def decode_GPS_data(data):
                     the current survey product
     '''
 
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__ +'.decode_GPS_data')
 
     # GPS time is delivered as: weeks from reference date, plus seconds into the week.
     leap_seconds = 18  # GPS time does not account for leap seconds; as of ~2019, GPS leads UTC by 18 seconds.
@@ -1096,8 +1122,8 @@ def decode_GPS_data(data):
     if len(pos_inds)==0 and len(vel_inds)==0:
         logger.debug("No GPS logs found")
         return []
-    else:
-        logger.debug(f'found {len(pos_inds)} position logs and {len(vel_inds)} velocity logs')
+    # else:
+        # logger.debug(f'found {len(pos_inds)} position logs and {len(vel_inds)} velocity logs')
         # In survey mode, there should never be more than 1 position and 1 velocity entry
         
     # See page 47 of the OEM7 Firmware Reference Manual for the header reference indices,
@@ -1242,8 +1268,8 @@ def decode_survey_data(packets, separation_time = 4.5):
 
     # leap_seconds = 18  # GPS time does not account for leap seconds; as of ~2019, GPS leads UTC by 18 seconds.
     # reference_date = datetime.datetime(1980,1,6,0,0, tzinfo=datetime.timezone.utc) - datetime.timedelta(seconds=leap_seconds)
-    logger = logging.getLogger(__name__)
-
+    # logger = logging.getLogger(__name__ +'.decode_survey_data')
+    logger = logging.getLogger(__name__ +'.decode_survey_data')
     S_packets = list(filter(lambda packet: packet['dtype'] == 'S', packets))
     # Sort by arrival time
     # S_packets = sorted(S_packets, key=lambda p: p['header_epoch_sec'] + p['header_ns']*1e-9)
@@ -1358,3 +1384,48 @@ def unique_entries(in_list):
         el.pop('id')
     
     return temp
+
+
+def deep_compare(d1, d2):
+    ''' Implements a recursive deep compare of two objects
+        (lists, dictionaries, arrays, or otherwise comparable)
+        and any structure comprised of these types. '''
+    
+    # Check types
+    if not isinstance(d1, type(d2)):
+        print(f'Type mismatch: {type(d1)}, {type(d2)}')
+        return False
+    
+    # Root nodes are dictionaries -- process each element
+    if isinstance(d1, dict):
+        k1 = sorted(d1.keys())
+        k2 = sorted(d2.keys())
+        if k1 != k2:
+            print(f'Key mismatch')
+            print(k1)
+            print(k2)
+            return False
+
+        for k in k1:
+            if not deep_compare(d1[k], d2[k]):
+                print(f'{k} does not match')
+                return False
+        return True
+
+    # Root nodes are lists or arrays -- process each element
+    if (isinstance(d1, list) or isinstance(d1, np.ndarray)):
+        if len(d1) != len(d2):
+            return False
+        for a, b in zip(d1, d2):
+            if not deep_compare(a, b):
+                return False
+            return True
+
+    # Base case -- do simple comparisons
+    if isinstance(d1, np.float):
+        # Numpy compares nans as false
+        if np.isnan(d1) and np.isnan(d2):
+            return True
+
+    # Strings, ints, numbers, whatever
+    return d1==d2
