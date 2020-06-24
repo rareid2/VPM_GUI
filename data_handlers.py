@@ -515,15 +515,15 @@ def decode_packets_CSV(data_root, filename):
     for delimeter in delimeters:
 
         counts = header_line.count(delimeter)
-        logger.debug(f'Delimter: " {delimeter}" counts: {counts}')
+        logger.debug(f'Delimiter: " {delimeter}" counts: {counts}')
 
         # header_string = str(header_line).split()
         
         if counts>3:
             logger.info(f'using delimeter "{delimeter}"')
             header_string = header_line.split(delimeter)
+            logger.debug(f'Header string: {header_string}')
             break
-    logger.debug(f'Header string: {header_string}')
 
     with open(fpath) as csvfile:
         # Skip up to the header row:
