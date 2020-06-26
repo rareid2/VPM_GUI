@@ -776,6 +776,10 @@ class GUI(tk.Frame):
             s2 = None
             cur_survey = self.survey_products
 
+        if not cur_survey:
+            logging.info('No survey data within selected time range')
+            return
+
         plot_survey_data_and_metadata(self.root, cur_survey, self.survey_clim_sliders.get(),
             line_plots=lines_to_do, cal_file=None, 
             plot_map = self.plot_map.get(),
@@ -783,7 +787,8 @@ class GUI(tk.Frame):
             B_gain=self.survey_B_gain.get(), 
             bus_timestamps=self.survey_time_axis.get(),
             t1 = s1, t2 = s2)
-
+        
+        
     def call_plot_burst(self):
         if not self.burst_products:
             logging.info(f'No burst data present')
