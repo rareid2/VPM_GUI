@@ -140,7 +140,7 @@ def plot_burst_map(parent, gps_data, **kwargs):
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
 
     # Call the core plotting script; forward all the keyword arguments.
-    plot_map_core(figure, gps_data, **kwargs)
+    plot_map_core(fig, gps_data, **kwargs)
 
     return
 
