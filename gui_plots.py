@@ -8,6 +8,9 @@ import logging
 import pickle
 import os
 
+from matplotlib.widgets import Slider, Button, RadioButtons
+
+
 try:
     from mpl_toolkits.basemap import Basemap
 except:
@@ -47,7 +50,9 @@ def packet_inspector(parent, packets):
     packet_inspector_core(fig, packets)
 
 
-def plot_survey_data_and_metadata(parent, S_data, **kwargs):
+
+
+def plot_survey_data_and_metadata(parent, S_data, clim_controls, **kwargs):
     ''' wrap the survey plotter with a TK window '''
     
     figure_window = tk.Toplevel(parent)
@@ -63,11 +68,14 @@ def plot_survey_data_and_metadata(parent, S_data, **kwargs):
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
 
     # Call the core plotting script; forward all the keyword arguments.
-    plot_survey_core(fig, S_data, **kwargs)
+    _, pe, pb = plot_survey_core(fig, S_data, **kwargs)
+
+    if clim_controls:
+        ctrl = clim_control_window(parent, fig, pe, pb)
 
     return
 
-def plot_burst_data(parent, burst, cal_file=None):
+def plot_burst_data(parent, burst, cal_file=None, show_clim_sliders=True):
     ''' wrap the burst plotter with a TK window '''
 
     logger = logging.getLogger(__name__)
@@ -87,6 +95,7 @@ def plot_burst_data(parent, burst, cal_file=None):
 
     # Set up figure and Tk window
     figure_window = tk.Toplevel(parent)
+
     fig = Figure(figsize=(12,8))
     canvas = FigureCanvasTkAgg(fig, master=figure_window)  # A tk.DrawingArea.
     canvas.draw()
@@ -95,12 +104,24 @@ def plot_burst_data(parent, burst, cal_file=None):
     toolbar.update()
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
 
+
+
     # Call it (time or frequency domain)
     if cfg['TD_FD_SELECT'] == 1:
-        plot_burst_TD(fig, burst, cal_data = cal_data)
+        figure_window.title('Time-Domain Burst')
+        _, pe, pb = plot_burst_TD(fig, burst, cal_data = cal_data)
+        fig.canvas.draw()
+
+        if show_clim_sliders:
+            ctrl = clim_control_window(parent, fig, pe, pb, margin=40)
+
+
+
 
     elif cfg['TD_FD_SELECT'] == 0:
+        figure_window.title('Frequency-Domain Burst')
         plot_burst_FD(fig, burst, cal_data = cal_data)
+        # Not fully implemented -- no frequency domain bursts to work with
 
     return
 
@@ -119,7 +140,59 @@ def plot_burst_map(parent, gps_data, **kwargs):
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
 
     # Call the core plotting script; forward all the keyword arguments.
-    plot_map_core(fig, gps_data, **kwargs)
+    plot_map_core(figure, gps_data, **kwargs)
 
     return
+
+
+
+class clim_control_window():
+    def __init__(self, parent, figure, pe, pb, margin=None):
+        self.slider_window = tk.Toplevel(parent)
+        self.slider_window.title('Adjust Color Limits')
+        self.f2 = Figure(figsize=(6,2))
+        self.c2 = FigureCanvasTkAgg(self.f2, master=self.slider_window)  # A tk.DrawingArea.
+        self.c2.draw()
+        self.c2.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+
+        self.pe = pe
+        self.pb = pb
+        self.fig = figure
+        self.Ecmin_ax  = self.f2.add_axes([0.15, 0.5, 0.65, 0.1])
+        self.Ecmax_ax  = self.f2.add_axes([0.15, 0.7, 0.65, 0.1])
+
+        self.Bcmin_ax  = self.f2.add_axes([0.15, 0.1, 0.65, 0.1])
+        self.Bcmax_ax  = self.f2.add_axes([0.15, 0.3, 0.65, 0.1])
+
+        self.Ecmax_ax.set_title('Click to change color scale')
+
+        if margin:
+            (vmin, vmax) = self.pe.get_clim()
+            self.esmin = Slider(self.Ecmin_ax, 'E Min (FD)', vmin - margin, vmax + margin, valinit=vmin)
+            self.esmax = Slider(self.Ecmax_ax, 'E Max (FD)', vmin - margin, vmax + margin, valinit=vmax)
+            (vmin, vmax) = self.pb.get_clim()
+            self.bsmin = Slider(self.Bcmin_ax, 'B Min (FD)', vmin - margin, vmax + margin, valinit=vmin)
+            self.bsmax = Slider(self.Bcmax_ax, 'B Max (FD)', vmin - margin, vmax + margin, valinit=vmax)
+
+        else:
+            # Default to 0-255
+            (vmin, vmax) = self.pe.get_clim()
+            self.esmin = Slider(self.Ecmin_ax, 'E Min (FD)', 0,255, valinit=vmin)
+            self.esmax = Slider(self.Ecmax_ax, 'E Max (FD)', 0,255, valinit=vmax)
+            (vmin, vmax) = self.pb.get_clim()
+            self.bsmin = Slider(self.Bcmin_ax, 'B Min (FD)', 0,255, valinit=vmin)
+            self.bsmax = Slider(self.Bcmax_ax, 'B Max (FD)', 0,255, valinit=vmax)
+                
+        
+        self.esmin.on_changed(self.update_e)
+        self.esmax.on_changed(self.update_e)
+        self.bsmin.on_changed(self.update_b)
+        self.bsmax.on_changed(self.update_b)
+
+    def update_e(self,val):
+        self.pe.set_clim([self.esmin.val,self.esmax.val])
+        self.fig.canvas.draw()
+    def update_b(self,val):
+        self.pb.set_clim([self.bsmin.val,self.bsmax.val])
+        self.fig.canvas.draw()
 

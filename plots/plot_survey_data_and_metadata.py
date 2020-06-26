@@ -305,4 +305,4 @@ def plot_survey_data_and_metadata(fig, S_data,
     # fig.suptitle(f"VPM Survey Data\n {dts[0].strftime('%D%, %H:%m:%S')} -- {dts[-1].strftime('%D%, %H:%m:%S')}")
     fig.suptitle(f"VPM Survey Data\n {t1.strftime('%D%, %H:%M:%S')} -- {t2.strftime('%D%, %H:%M:%S')}")
 
-    return fig
+    return fig, p1, p2

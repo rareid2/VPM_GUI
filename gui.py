@@ -15,13 +15,28 @@ from gui_plots import *      # Plotting modules
 from db_handlers import get_packets_within_range
 import datetime
 import dateutil
+import subprocess
+
 from scipy.io import savemat, loadmat
+# try:
+#     from __ver__ import __ver__
+# except:
+#     __ver__ = "N/A"
 
 
 class GUI(tk.Frame):
 
     # This class defines the graphical user interface             
     def __init__(self, parent, *args, **kwargs):
+
+
+        try:
+            process = subprocess.Popen(['git', 'rev-parse', 'HEAD'], shell=False, stdout=subprocess.PIPE)
+            git_head_hash = process.communicate()[0].strip()[0:8]
+            git_str = "commit # " + git_head_hash.decode('utf-8')
+        except:
+            git_str = ''
+
 
         # ----------------------- GUI setup ---------------------------
         tk.Frame.__init__(self, parent, *args, **kwargs)
@@ -41,6 +56,7 @@ class GUI(tk.Frame):
         process_row = 15
         save_row = 25
         plot_row = 35
+
 
 
         self.grid(column=ncols, row=nrows, sticky='ew')
@@ -102,7 +118,7 @@ class GUI(tk.Frame):
         self.root.option_add('*tearOff', 'FALSE')
 
         self.header_text = tk.StringVar()
-        self.header_text.set("VPM Ground Support Software\nFancy GUI")
+        self.header_text.set(f"VPM Ground Support Software\n{git_str}")
         self.label = tk.Label(self.root, font=('Helvetica', 14, 'bold'), textvariable=self.header_text)
         self.label.grid(row=0, column=0, rowspan=4, columnspan=ncols, sticky='ew')
 
@@ -306,6 +322,11 @@ class GUI(tk.Frame):
         tk.Label(self.root, text="B channel gain:", font=('Helvetica', 12)).grid(row=plot_row + 4, column=0,rowspan=2, sticky='e')
         tk.Label(self.root, text="Time axis:", font=('Helvetica', 12)).grid(row=plot_row + 6, column=0,rowspan=2, sticky='e')
 
+        self.survey_clim_sliders = tk.BooleanVar()
+        self.survey_clim_sliders.set(True)
+        self.survey_clim_check = tk.Checkbutton(self.root, text='Show colorbar sliders', variable=self.survey_clim_sliders)
+        self.survey_clim_check.grid(row=plot_row+1, column=1, sticky='w')
+
         self.survey_E_gain = tk.BooleanVar()
         self.survey_E_low_gain_button = tk.Radiobutton(self.root, text="Low", variable=self.survey_E_gain, value=False)
         self.survey_E_low_gain_button.grid(row = plot_row+2, column=1, sticky='w')
@@ -388,6 +409,11 @@ class GUI(tk.Frame):
             k.grid(row=plot_row + 12, column=ind, sticky='w')
         for ind, k in enumerate(self.burst_chks[2:]):
             k.grid(row=plot_row + 13, column=ind, sticky='w')
+
+        self.clim_sliders = tk.BooleanVar()
+        self.clim_sliders.set(True)
+        self.color_slider_check = tk.Checkbutton(self.root, text= "show colorbar sliders", variable = self.clim_sliders)
+        self.color_slider_check.grid(row=plot_row+14, column=0, sticky='w')
          
         tk.Label(self.root, text="Available bursts:",  font=('Helvetica', 12)).grid(row=plot_row+11, column=2, sticky='ew')
 
@@ -728,15 +754,29 @@ class GUI(tk.Frame):
                  if self.line_plot_enables[x].get()]
         logging.info(lines_to_do)
 
+        
         try:
+            # Select subset of the survey data
             s1 = dateutil.parser.parse(self.s1_entry.get()).replace(tzinfo=datetime.timezone.utc)
             s2 = dateutil.parser.parse(self.s2_entry.get()).replace(tzinfo=datetime.timezone.utc)
+            if self.survey_time_axis.get():
+                # GPS timestamps
+                cur_survey = list(filter(lambda x:  ('GPS' in x) and 
+                                                    ('timestamp' in x['GPS'][0]) and
+                                                    (x['GPS'][0]['timestamp'] > s1.timestamp() - 60) and
+                                                    (x['GPS'][0]['timestamp'] < s2.timestamp() + 60), self.survey_products))
+            else:
+                # bus timestamps
+                cur_survey = list(filter(lambda x:  (x['header_timestamp'] > s1.timestamp() - 60) and
+                                                    (x['header_timestamp'] < s2.timestamp() + 60), self.survey_products))
+
         except:
             logging.warning("couldn't parse survey start and end times -- using defaults")
             s1 = None
             s2 = None
-            
-        plot_survey_data_and_metadata(self.root, self.survey_products,
+            cur_survey = self.survey_products
+
+        plot_survey_data_and_metadata(self.root, cur_survey, self.survey_clim_sliders.get(),
             line_plots=lines_to_do, cal_file=None, 
             plot_map = self.plot_map.get(),
             E_gain=self.survey_E_gain.get(),
@@ -753,7 +793,7 @@ class GUI(tk.Frame):
         for ind in self.listbox.curselection():        
             logging.info(f'Plotting burst {ind}')
             cur_burst = self.burst_products[int(ind)]
-            plot_burst_data(self.root, cur_burst, self.cal_file)
+            plot_burst_data(self.root, cur_burst, cal_file=self.cal_file, show_clim_sliders=self.clim_sliders.get())
 
 
     def call_burst_map(self):
@@ -866,6 +906,8 @@ class GUI(tk.Frame):
         self.update_counters()
         self.update_burst_list()
         self.update_stat_list()
+        self.update_time_fields()
+        self.update_survey_time_fields()
 
         return True
 
@@ -909,6 +951,8 @@ class GUI(tk.Frame):
     
         self.update_counters()        
         self.update_time_fields()
+        self.update_survey_time_fields()
+
         return True
 
     def display_help(self):
@@ -952,7 +996,14 @@ def main():
     # gui.call_plot_burst()
     # gui.call_plot_survey()
 
-
+    # Load a burst:
+    # infile = "/Users/austin/Dropbox/VPM working directory/VPM Data/processed/burst/mat/2020/05/15/VPM_burst_TD_2020-05-15_1147.mat"
+    # gui.burst_products.extend(read_burst_matlab(infile))
+    # gui.update_counters()
+    # gui.update_survey_time_fields()
+    # gui.update_burst_list()
+    # gui.call_plot_burst()
+    
     gui.root.mainloop()
     # t1.join()
 

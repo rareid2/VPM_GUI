@@ -218,7 +218,7 @@ def plot_burst_TD(fig, burst, cal_data = None):
     #     fname = components[0] + f"_{ind}" + components[1]
 
     # fig.savefig(fname, bbox_inches='tight')
-
+    return fig, pe, pb
 
 def plot_burst_FD(fig, burst, cal_data = None):
     logger = logging.getLogger('plot_burst_FD')
